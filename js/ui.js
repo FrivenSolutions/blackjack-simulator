@@ -5,7 +5,10 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const STORE = 'shoe-odds-v1';
+  const OLD_STORE = 'shoe-odds-v1';
+  const INDEX_KEY = 'shoe-odds-profiles';
+  const profileKey = (id) => 'shoe-odds-p:' + id;
+  const DATA_VERSION = 2;
   const ACTIONS = ['H', 'S', 'D', 'P', 'R'];
   const ACTION_KEYS = { h: 'H', s: 'S', d: 'D', p: 'P', r: 'R' };
   const AVAIL_KEY = { H: 'hit', S: 'stand', D: 'double', P: 'split', R: 'surrender' };
@@ -30,24 +33,43 @@
   // State
   // ---------------------------------------------------------------------------
 
-  function load() {
-    try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch (e) { return {}; }
+  // Saved data lives in localStorage: one index of profiles, and one record per profile.
+  // Every access is wrapped, because some browsers block storage.
+  function storeGet(key) {
+    try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; }
   }
-  const saved = load();
-  const S = Object.assign({}, DEFAULT_SETTINGS, saved.settings || {});
-  S.rules = Object.assign({}, BJ.DEFAULT_RULES, (saved.settings && saved.settings.rules) || {});
+  function storeSet(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
+  }
+  function storeDel(key) {
+    try { localStorage.removeItem(key); } catch (e) { /* nothing to remove */ }
+  }
+  const storageOK = storeSet('shoe-odds-test', 1);
+  storeDel('shoe-odds-test');
 
-  const human = BJ.makeSeat({ name: 'You', type: 'human', bankroll: saved.human ? saved.human.bankroll : S.startBankroll });
-  if (saved.human && saved.human.stats) {
-    human.stats = Object.assign(BJ.newStats(), saved.human.stats);
-    if (human.stats.lowBankroll === null) human.stats.lowBankroll = human.bankroll;
+  function loadProfiles() {
+    let idx = storeGet(INDEX_KEY);
+    if (!idx || !Array.isArray(idx.list) || !idx.list.length) {
+      idx = { active: 'p1', list: [{ id: 'p1', name: 'Player 1' }] };
+      // Move progress from the first version of the game into the first profile.
+      const old = storeGet(OLD_STORE);
+      if (old) { storeSet(profileKey('p1'), old); storeDel(OLD_STORE); }
+      storeSet(INDEX_KEY, idx);
+    }
+    if (!idx.list.some((x) => x.id === idx.active)) idx.active = idx.list[0].id;
+    return idx;
   }
-  let rebuys = (saved.human && saved.human.rebuys) || 0;
-  let history = saved.history || [];
-  let simResults = saved.simResults || [];
-  let lastBet = saved.lastBet || 25;
-  human.pendingBet = Math.min(lastBet, human.bankroll);
-  let sessionStart = human.bankroll;
+  const profiles = loadProfiles();
+  const activeProfile = () => profiles.list.find((x) => x.id === profiles.active);
+
+  // These objects keep their identity; applyData() refills them when a profile loads.
+  const S = {};
+  const human = BJ.makeSeat({ name: 'You', type: 'human' });
+  let rebuys = 0;
+  let history = [];
+  let simResults = [];
+  let lastBet = 25;
+  let sessionStart = 0;
 
   let table = null;
   let busy = false;
@@ -63,25 +85,77 @@
   function newDrillStats() {
     return { n: 0, correct: 0, streak: 0, best: 0, byKind: { hard: [0, 0], soft: [0, 0], pairs: [0, 0] }, misses: [] };
   }
-  const drill = {
-    focus: (saved.drill && saved.drill.focus) || 'hitstand',
-    stats: Object.assign(newDrillStats(), (saved.drill && saved.drill.stats) || {}),
-    spot: null,
-    answer: null,
-    retry: [],
-  };
+  const drill = { focus: 'hitstand', stats: newDrillStats(), spot: null, answer: null, retry: [] };
 
+  function currentData() {
+    return {
+      v: DATA_VERSION,
+      settings: S,
+      human: { bankroll: human.bankroll, stats: human.stats, rebuys },
+      history: history.slice(-1000),
+      simResults: simResults.slice(0, 30),
+      drill: { focus: drill.focus, stats: drill.stats },
+      lastBet,
+      table: table ? table.snapshot() : null,
+    };
+  }
+
+  // Called after every move, so a reload never undoes a decision or returns a bet.
   function save() {
-    try {
-      localStorage.setItem(STORE, JSON.stringify({
-        settings: S,
-        human: { bankroll: human.bankroll, stats: human.stats, rebuys },
-        history: history.slice(-1000),
-        simResults: simResults.slice(0, 30),
-        drill: { focus: drill.focus, stats: drill.stats },
-        lastBet,
-      }));
-    } catch (e) { /* storage blocked: the game still works for this visit */ }
+    storeSet(profileKey(profiles.active), currentData());
+  }
+
+  function replaceContents(target, source) {
+    for (const k of Object.keys(target)) delete target[k];
+    Object.assign(target, source);
+  }
+
+  // Loads one profile's data (or defaults when data is empty) into the game.
+  function applyData(data) {
+    const d = data && typeof data === 'object' ? data : {};
+    replaceContents(S, Object.assign(JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), d.settings || {}));
+    S.rules = Object.assign({}, BJ.DEFAULT_RULES, (d.settings && d.settings.rules) || {});
+    replaceContents(human, BJ.makeSeat({ name: 'You', type: 'human', bankroll: d.human ? d.human.bankroll : S.startBankroll }));
+    if (d.human && d.human.stats) {
+      human.stats = Object.assign(BJ.newStats(), d.human.stats);
+      if (human.stats.lowBankroll === null) human.stats.lowBankroll = human.bankroll;
+    }
+    rebuys = (d.human && d.human.rebuys) || 0;
+    history = Array.isArray(d.history) ? d.history : [];
+    simResults = Array.isArray(d.simResults) ? d.simResults : [];
+    lastBet = d.lastBet || 25;
+    drill.focus = (d.drill && BJ.DRILL_FOCUS[d.drill.focus] && d.drill.focus) || 'hitstand';
+    drill.stats = Object.assign(newDrillStats(), (d.drill && d.drill.stats) || {});
+    drill.spot = null;
+    drill.answer = null;
+    drill.retry = [];
+    coachFeedback = null;
+    coachShort = null;
+    countCheck = null;
+    roundSummary = null;
+    oddsCache = { key: null, odds: null };
+    shownCards = new WeakMap();
+    draft = null;
+    table = null;
+    if (d.table) {
+      try { restoreTable(d.table); } catch (e) { table = null; }
+    }
+    if (!table) buildTable();
+    human.pendingBet = human.inRound ? human.pendingBet : Math.min(lastBet, human.bankroll);
+    sessionStart = human.inRound ? human.roundStart : human.bankroll;
+  }
+
+  // Puts a saved table back. The human seat in the save becomes the live `human` object.
+  function restoreTable(snap) {
+    const t = BJ.Table.fromSnapshot(snap);
+    const i = t.seats.findIndex((x) => x.type === 'human');
+    if (i < 0) throw new Error('No human seat in the save');
+    replaceContents(human, t.seats[i]);
+    t.seats[i] = human;
+    table = t;
+    logLines = [];
+    const midHand = !['betting', 'roundOver'].includes(t.phase);
+    addLog('info', midHand ? 'Welcome back. Your saved hand continues.' : 'Welcome back. The shoe and the count are as you left them.');
   }
 
   function buildTable() {
@@ -530,6 +604,7 @@
     try {
       for (;;) {
         renderAll();
+        save();
         const t = table;
         if (t.phase === 'insurance') break;
         if (t.phase === 'playing') {
@@ -1258,7 +1333,8 @@
       chk('set-count', draft.showCount, 'Show the count', 'Turn this off to practice counting. You can check your count at any time.') +
       '<div class="field"><label for="set-bank">Buy-in amount ($)</label><input type="number" id="set-bank" min="100" step="100" value="' + draft.startBankroll + '"><small>Used when you buy in again or reset.</small></div>' +
       '</div></div>' +
-      '<div class="row"><button class="btn primary" id="set-apply">Apply and start a new shoe</button><button class="btn" id="set-default">Use default settings</button><span class="hint" id="set-msg">' + esc(setupMsg) + '</span></div>';
+      '<div class="row"><button class="btn primary" id="set-apply">Apply and start a new shoe</button><button class="btn" id="set-default">Use default settings</button><span class="hint" id="set-msg">' + esc(setupMsg) + '</span></div>' +
+      '<div class="section" id="saved-progress"></div>';
 
     const readDraft = () => {
       r.decks = Number($('set-decks').value);
@@ -1283,6 +1359,7 @@
       draft.startBankroll = Math.max(100, Number($('set-bank').value) || 1000);
     };
     $('view-setup').onchange = (e) => {
+      if (e.target.closest('#saved-progress')) return;
       readDraft();
       setupMsg = 'Not applied yet.';
       if (e.target.id === 'set-nbots' || e.target.id.startsWith('set-') && ['set-decks', 'set-s17', 'set-pay', 'set-das', 'set-sur', 'set-rsa', 'set-maxh'].includes(e.target.id)) renderSetup();
@@ -1297,8 +1374,8 @@
         return;
       }
       Object.assign(S, JSON.parse(JSON.stringify(draft)));
-      save();
       buildTable();
+      save();
       renderAll();
       setupMsg = 'Applied. New shoe shuffled.';
       draft = null;
@@ -1309,13 +1386,221 @@
       setupMsg = 'Defaults loaded. Not applied yet.';
       renderSetup();
     };
+    renderSavedProgress();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Saved progress: profiles, export / import, reset everything
+  // ---------------------------------------------------------------------------
+
+  let profMsg = '';
+  let armed = null; // id of a button waiting for its second click
+  let exportText = '';
+
+  function profileSummary(id) {
+    const d = id === profiles.active ? currentData() : storeGet(profileKey(id));
+    if (!d || !d.human) return 'New';
+    const st = d.human.stats || {};
+    return money(d.human.bankroll) + ' · ' + (st.rounds || 0).toLocaleString() + ' hands';
+  }
+
+  function saveIndex() {
+    storeSet(INDEX_KEY, profiles);
+  }
+
+  function canChangeProfile() {
+    if (busy || simRunning) {
+      profMsg = 'Wait until the cards stop moving, then try again.';
+      return false;
+    }
+    return true;
+  }
+
+  function loadProfile(id) {
+    save();
+    profiles.active = id;
+    saveIndex();
+    applyData(storeGet(profileKey(id)));
+    renderAll();
+    if (['playing', 'dealer', 'insurance', 'roundOver'].includes(table.phase)) run();
+  }
+
+  function newProfileId() {
+    return 'p' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+  }
+
+  function uniqueName(base) {
+    const names = new Set(profiles.list.map((x) => x.name));
+    if (!names.has(base)) return base;
+    for (let i = 2; ; i++) if (!names.has(base + ' ' + i)) return base + ' ' + i;
+  }
+
+  function cleanName(v, fallback) {
+    const n = String(v || '').trim().slice(0, 30);
+    return n || fallback;
+  }
+
+  // Checks pasted or loaded text. Returns {name, data} or throws an Error with a plain message.
+  function parseImport(text) {
+    let obj;
+    try { obj = JSON.parse(text); } catch (e) { throw new Error('This is not saved progress. Copy the whole text from Export, from { to }.'); }
+    if (!obj || obj.app !== 'shoe-odds' || !obj.data || typeof obj.data !== 'object') throw new Error('This text is not from Shoe & Odds.');
+    if (obj.v > DATA_VERSION) throw new Error('This save comes from a newer version of the game.');
+    const d = obj.data;
+    if (d.settings && typeof d.settings !== 'object') throw new Error('The settings in this save are damaged.');
+    if (d.human && !(typeof d.human.bankroll === 'number' && d.human.bankroll >= 0)) throw new Error('The bankroll in this save is damaged.');
+    if (d.table) {
+      try { BJ.Table.fromSnapshot(d.table); } catch (e) { d.table = null; }
+    }
+    return { name: cleanName(obj.name, 'Imported'), data: d };
+  }
+
+  function confirmBtn(id, label, confirmLabel, extra) {
+    return '<button class="btn' + (extra || '') + '" id="' + id + '">' + (armed === id ? confirmLabel : label) + '</button>';
+  }
+
+  function renderSavedProgress() {
+    const box = $('saved-progress');
+    if (!box) return;
+    const active = activeProfile();
+    const others = profiles.list.filter((x) => x.id !== profiles.active);
+    box.innerHTML = '<h3>Saved progress</h3>' +
+      (storageOK
+        ? '<p>The game saves after every move, in this browser on this device. A reload continues the same hand. Your bankroll, stats, drill score, simulator results and settings stay until you reset them.</p>'
+        : '<p class="neg">This browser blocks saving (for example, a private window). Your progress lasts only until you close the page. Use Export to keep a copy.</p>') +
+
+      '<h4>Profiles</h4><p class="note">Each profile has its own bankroll, stats, drill score and settings. Use one for each person, or one for practice and one for "real" play.</p>' +
+      '<div class="prof-list">' +
+      '<div class="prof-row active"><div class="field"><label for="prof-name">Playing now</label><input id="prof-name" type="text" maxlength="30" value="' + esc(active.name) + '"></div>' +
+      '<span class="prof-sum num">' + esc(profileSummary(active.id)) + '</span>' +
+      '<button class="btn" id="prof-rename">Rename</button></div>' +
+      others.map((x) => '<div class="prof-row"><b class="prof-title">' + esc(x.name) + '</b><span class="prof-sum num">' + esc(profileSummary(x.id)) + '</span>' +
+        '<button class="btn" data-prof-switch="' + x.id + '">Switch to</button>' +
+        confirmBtn('prof-del-' + x.id, 'Delete', 'Click again to delete') + '</div>').join('') +
+      '</div>' +
+      '<div class="row prof-new"><div class="field"><label for="prof-new-name">New profile</label><input id="prof-new-name" type="text" maxlength="30" placeholder="' + esc(uniqueName('Player ' + (profiles.list.length + 1))) + '"></div>' +
+      '<button class="btn" id="prof-create">Create and switch</button></div>' +
+
+      '<h4>Export and import</h4><p class="note">Export makes a copy of this profile as text. Paste it into a note or a message to keep it, or to move it to another device. Import adds a copy as a new profile.</p>' +
+      '<div class="row"><button class="btn" id="prof-export">Export this profile</button>' + (exportText ? '<button class="btn" id="prof-copy">Copy text</button>' : '') + '</div>' +
+      (exportText ? '<textarea id="prof-export-text" class="prof-text" readonly aria-label="Exported profile">' + esc(exportText) + '</textarea>' : '') +
+      '<div class="field" style="margin-top:10px"><label for="prof-import-text">Paste saved text, or choose a file</label>' +
+      '<textarea id="prof-import-text" class="prof-text" placeholder="{&quot;app&quot;:&quot;shoe-odds&quot;, ...}"></textarea></div>' +
+      '<div class="row"><input id="prof-import-file" type="file" accept=".json,.txt,application/json,text/plain" aria-label="Choose a saved file"><button class="btn" id="prof-import">Import as new profile</button></div>' +
+
+      '<h4>Reset everything</h4><p class="note">Clears this profile only: bankroll, stats, bankroll chart, drill score, simulator results, settings and the shoe. Other profiles stay. You cannot undo this. Export first if you want a copy.</p>' +
+      '<div class="row">' + confirmBtn('prof-reset-all', 'Reset everything in "' + esc(active.name) + '"', 'Click again to reset everything', ' danger') + '</div>' +
+      '<p class="hint" id="prof-msg" role="status">' + esc(profMsg) + '</p>';
+
+    const rerender = (msg) => { if (msg !== undefined) profMsg = msg; renderSavedProgress(); };
+    const disarmOthers = (id) => { armed = armed === id ? null : id; };
+
+    $('prof-rename').onclick = () => {
+      active.name = cleanName($('prof-name').value, active.name);
+      saveIndex();
+      rerender('Renamed to "' + active.name + '".');
+    };
+    box.querySelectorAll('[data-prof-switch]').forEach((b) => {
+      b.onclick = () => {
+        if (!canChangeProfile()) return rerender();
+        const target = profiles.list.find((x) => x.id === b.dataset.profSwitch);
+        armed = null;
+        exportText = '';
+        loadProfile(target.id);
+        profMsg = 'Switched to "' + target.name + '".';
+        renderSetup();
+      };
+    });
+    for (const x of others) {
+      $('prof-del-' + x.id).onclick = () => {
+        if (armed !== 'prof-del-' + x.id) { disarmOthers('prof-del-' + x.id); return rerender(''); }
+        armed = null;
+        profiles.list = profiles.list.filter((y) => y.id !== x.id);
+        storeDel(profileKey(x.id));
+        saveIndex();
+        rerender('Deleted "' + x.name + '".');
+      };
+    }
+    $('prof-create').onclick = () => {
+      if (!canChangeProfile()) return rerender();
+      const name = uniqueName(cleanName($('prof-new-name').value, 'Player ' + (profiles.list.length + 1)));
+      save();
+      const id = newProfileId();
+      profiles.list.push({ id, name });
+      profiles.active = id;
+      saveIndex();
+      applyData(null);
+      save();
+      renderAll();
+      armed = null;
+      exportText = '';
+      profMsg = 'Created "' + name + '". It starts with ' + money(S.startBankroll) + ' and default settings.';
+      renderSetup();
+    };
+    $('prof-export').onclick = () => {
+      exportText = JSON.stringify({ app: 'shoe-odds', v: DATA_VERSION, name: active.name, exported: new Date().toISOString(), data: currentData() });
+      rerender('Export ready (' + Math.round(exportText.length / 1024) + ' KB of text). Copy it and keep it somewhere safe.');
+    };
+    if ($('prof-copy')) {
+      $('prof-copy').onclick = () => {
+        const ta = $('prof-export-text');
+        const fallback = () => { ta.focus(); ta.select(); $('prof-msg').textContent = 'Copying is blocked here. The text is selected: copy it with your device\'s Copy command.'; };
+        try {
+          navigator.clipboard.writeText(exportText).then(() => { $('prof-msg').textContent = 'Copied. Paste it into a note or a message.'; }, fallback);
+        } catch (e) { fallback(); }
+      };
+    }
+    $('prof-import-file').onchange = () => {
+      const f = $('prof-import-file').files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => { $('prof-import-text').value = String(reader.result); $('prof-msg').textContent = 'File loaded. Select "Import as new profile".'; };
+      reader.onerror = () => { $('prof-msg').textContent = 'The file could not be read. Try pasting the text.'; };
+      reader.readAsText(f);
+    };
+    $('prof-import').onclick = () => {
+      if (!canChangeProfile()) return rerender();
+      let parsed;
+      try { parsed = parseImport($('prof-import-text').value); } catch (e) { return rerender(e.message); }
+      save();
+      const id = newProfileId();
+      const name = uniqueName(parsed.name);
+      if (!storeSet(profileKey(id), parsed.data) && storageOK) return rerender('There is no space left to save this profile. Delete an old profile first.');
+      profiles.list.push({ id, name });
+      saveIndex();
+      exportText = '';
+      armed = null;
+      if (!storageOK) {
+        // Nothing persists, so load the data straight into the game.
+        profiles.active = id;
+        applyData(parsed.data);
+        renderAll();
+      } else {
+        loadProfile(id);
+      }
+      profMsg = 'Imported as "' + name + '" and switched to it.';
+      renderSetup();
+    };
+    $('prof-reset-all').onclick = () => {
+      if (armed !== 'prof-reset-all') { disarmOthers('prof-reset-all'); return rerender(''); }
+      if (!canChangeProfile()) return rerender();
+      armed = null;
+      exportText = '';
+      applyData(null);
+      save();
+      renderAll();
+      profMsg = 'Everything in "' + active.name + '" is reset.';
+      renderSetup();
+    };
   }
 
   // ---------------------------------------------------------------------------
   // Start
   // ---------------------------------------------------------------------------
 
-  buildTable();
+  applyData(storeGet(profileKey(profiles.active)));
   renderAll();
   show((location.hash || '').slice(1) || 'table');
+  // A saved hand continues where it stopped.
+  if (['playing', 'dealer', 'insurance', 'roundOver'].includes(table.phase)) run();
 })();

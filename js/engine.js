@@ -528,6 +528,8 @@
   // Table: one dealer, up to 7 seats, one shoe
   // ---------------------------------------------------------------------------
 
+  const SNAPSHOT_VERSION = 1;
+
   class Table {
     constructor(rules, rng) {
       this.rules = Object.assign({}, DEFAULT_RULES, rules || {});
@@ -985,6 +987,68 @@
       this.dealer = { cards: [], holeHidden: true };
       for (const s of this.seats) { s.hands = []; s.inRound = false; s.insurance = 0; }
       this.phase = 'betting';
+    }
+
+    // Plain-data copy of the whole table, so a reload can resume the same hand.
+    // Cards are stored once (in the shoe) and hands refer to them by id.
+    snapshot() {
+      const sh = this.shoe;
+      const ids = (cards) => cards.map((c) => c.id);
+      return {
+        v: SNAPSHOT_VERSION,
+        rules: this.rules,
+        shoe: {
+          decks: sh.decks, penetration: sh.penetration, shuffleCount: sh.shuffleCount,
+          cards: sh.cards.map((c) => [c.id, c.rank, c.suit]),
+          burned: sh.burned ? sh.burned.id : null,
+          pos: sh.pos, cutIndex: sh.cutIndex, runningCount: sh.runningCount, discards: sh.discards,
+        },
+        seats: this.seats.map((seat) => Object.assign({}, seat, {
+          hands: seat.hands.map((h) => Object.assign({}, h, { cards: ids(h.cards) })),
+          stats: Object.assign({}, seat.stats, { lowBankroll: Number.isFinite(seat.stats.lowBankroll) ? seat.stats.lowBankroll : null }),
+        })),
+        dealer: { cards: ids(this.dealer.cards), holeHidden: this.dealer.holeHidden },
+        phase: this.phase,
+        turn: this.turn,
+        peeked: this.peeked,
+        roundNo: this.roundNo,
+        shuffledThisRound: this.shuffledThisRound,
+      };
+    }
+
+    static fromSnapshot(data, rng) {
+      if (!data || data.v !== SNAPSHOT_VERSION) throw new Error('Unknown save format');
+      const t = new Table(data.rules, rng);
+      const sh = t.shoe;
+      const byId = new Map();
+      sh.cards = data.shoe.cards.map(([id, rank, suit]) => {
+        const c = { id, rank, suit, value: rankValue(rank) };
+        byId.set(id, c);
+        return c;
+      });
+      const card = (id) => {
+        const c = byId.get(id);
+        if (!c) throw new Error('Saved hand refers to a missing card');
+        return c;
+      };
+      Object.assign(sh, {
+        decks: data.shoe.decks, penetration: data.shoe.penetration, shuffleCount: data.shoe.shuffleCount,
+        burned: data.shoe.burned === null ? null : card(data.shoe.burned),
+        pos: data.shoe.pos, cutIndex: data.shoe.cutIndex, runningCount: data.shoe.runningCount, discards: data.shoe.discards,
+      });
+      t.seats = data.seats.map((s) => {
+        const seat = Object.assign({}, s, { hands: s.hands.map((h) => Object.assign({}, h, { cards: h.cards.map(card) })) });
+        seat.stats = Object.assign(newStats(), s.stats);
+        if (seat.stats.lowBankroll === null) seat.stats.lowBankroll = seat.bankroll;
+        return seat;
+      });
+      t.dealer = { cards: data.dealer.cards.map(card), holeHidden: data.dealer.holeHidden };
+      t.phase = data.phase;
+      t.turn = data.turn;
+      t.peeked = data.peeked;
+      t.roundNo = data.roundNo;
+      t.shuffledThisRound = data.shuffledThisRound;
+      return t;
     }
 
     // Plays a whole round at once. Only for tables where every seat is a bot.

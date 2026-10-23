@@ -30,6 +30,18 @@ odds, coach, count and log.
 - Keyboard: `H` hit, `S` stand, `D` double, `P` split, `R` surrender,
   `I` / `N` insurance, `Enter` deal.
 
+## Saving and resetting
+
+- The game saves after every move, in your browser. A reload continues the same
+  hand, with the same shoe and count. A reload never undoes a move or returns a bet.
+- **Profiles** (Settings → Saved progress): each profile has its own bankroll,
+  stats, drill score, simulator results and settings. You can create, switch,
+  rename and delete profiles.
+- **Export and import**: export a profile as text to keep a copy or to move it to
+  another device. Import pasted text or a file as a new profile.
+- **Resets**: each area has its own reset (Stats, Drill, Simulator, Settings).
+  **Reset everything** clears the current profile only. Every reset needs two clicks.
+
 ## The teaching tools
 
 - **Live odds**: the expected value (average win or loss per $1) of each move,

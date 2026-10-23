@@ -172,3 +172,32 @@ test('drill hands match their focus', () => {
     }
   }
 });
+
+test('a table snapshot resumes the same hand after a JSON round trip', () => {
+  const t = new BJ.Table(R, BJ.mulberry32(21));
+  t.seats.push(BJ.makeSeat({ name: 'Ava', style: 'counter' }), BJ.makeSeat({ name: 'You', type: 'human' }));
+  t.seats[1].pendingBet = 10;
+  // Play until the human must act, then copy the table.
+  let copy = null;
+  for (let round = 0; round < 50 && !copy; round++) {
+    t.startRound();
+    if (t.phase === 'insurance') t.decideInsurance(1, false);
+    while (t.phase === 'playing' && t.current().seat.type === 'bot') t.botStep();
+    if (t.phase === 'playing') copy = BJ.Table.fromSnapshot(JSON.parse(JSON.stringify(t.snapshot())));
+    else while (t.phase === 'dealer') t.dealerStep();
+  }
+  assert.ok(copy, 'reached a human decision');
+  assert.strictEqual(copy.shoe.pos, t.shoe.pos);
+  assert.strictEqual(copy.shoe.runningCount, t.shoe.runningCount);
+  assert.deepStrictEqual(copy.current().hand.cards.map((c) => c.id), t.current().hand.cards.map((c) => c.id));
+  assert.strictEqual(copy.recommend(), t.recommend());
+  // Both tables must finish the hand the same way.
+  for (const tb of [t, copy]) {
+    tb.act(tb.recommend());
+    while (tb.phase === 'playing') tb.current().seat.type === 'bot' ? tb.botStep() : tb.act(tb.recommend());
+    while (tb.phase === 'dealer') tb.dealerStep();
+  }
+  assert.deepStrictEqual(copy.seats.map((s) => s.bankroll), t.seats.map((s) => s.bankroll));
+  assert.deepStrictEqual(copy.dealer.cards.map((c) => c.id), t.dealer.cards.map((c) => c.id));
+  assert.throws(() => BJ.Table.fromSnapshot({ v: 99 }));
+});
