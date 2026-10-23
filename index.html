@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shoe &amp; Odds Blackjack</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,500;0,6..96,700;1,6..96,500&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <h1 class="brand">Shoe <em>&amp;</em> Odds</h1>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-table" data-view="table" aria-selected="true">Table</button>
+      <button class="tab" role="tab" id="tab-learn" data-view="learn" aria-selected="false">Learn</button>
+      <button class="tab" role="tab" id="tab-sim" data-view="sim" aria-selected="false">Simulator</button>
+      <button class="tab" role="tab" id="tab-stats" data-view="stats" aria-selected="false">Stats</button>
+      <button class="tab" role="tab" id="tab-setup" data-view="setup" aria-selected="false">Settings</button>
+    </nav>
+    <div class="purse">
+      <div><span>Bankroll</span><b id="bankroll">$1,000</b></div>
+      <div><span>Session</span><b id="session-net">$0</b></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- TABLE -->
+  <section class="view" id="view-table" aria-labelledby="tab-table">
+    <div class="table-layout">
+      <div>
+        <div class="felt" id="felt">
+          <div class="felt-top">
+            <div class="tray" id="tray"></div>
+            <div class="dealer">
+              <div class="zone-label">Dealer</div>
+              <div class="cards" id="dealer-cards"></div>
+              <div id="dealer-total"></div>
+            </div>
+            <div class="shoe" id="shoe"></div>
+          </div>
+          <div class="felt-print" id="felt-print"></div>
+          <div class="seats" id="seats"></div>
+          <div class="shuffle-banner" id="shuffle-banner" hidden>
+            <div>Shuffling the shoe<small id="shuffle-sub"></small></div>
+          </div>
+        </div>
+        <div class="controls" id="controls" aria-live="polite"></div>
+      </div>
+      <aside class="rail">
+        <div class="panel" id="odds-panel"></div>
+        <div class="panel" id="coach-panel"></div>
+        <div class="panel" id="count-panel"></div>
+        <div class="panel">
+          <h2>Table log</h2>
+          <div class="log" id="log"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- LEARN -->
+  <section class="view page" id="view-learn" aria-labelledby="tab-learn" hidden></section>
+
+  <!-- SIMULATOR -->
+  <section class="view page" id="view-sim" aria-labelledby="tab-sim" hidden></section>
+
+  <!-- STATS -->
+  <section class="view page" id="view-stats" aria-labelledby="tab-stats" hidden></section>
+
+  <!-- SETTINGS -->
+  <section class="view page" id="view-setup" aria-labelledby="tab-setup" hidden></section>
+</main>
+
+<script src="js/engine.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
