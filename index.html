@@ -44,14 +44,20 @@
             <div class="shoe" id="shoe"></div>
           </div>
           <div class="felt-print" id="felt-print"></div>
+          <div class="others" id="others" aria-label="Other players"></div>
           <div class="seats" id="seats"></div>
           <div class="shuffle-banner" id="shuffle-banner" hidden>
             <div>Shuffling the shoe<small id="shuffle-sub"></small></div>
           </div>
         </div>
-        <div class="controls" id="controls" aria-live="polite"></div>
+        <div class="dock" id="dock">
+          <button class="strip" id="strip" aria-controls="rail" aria-expanded="false"></button>
+          <div class="controls" id="controls" aria-live="polite"></div>
+        </div>
       </div>
-      <aside class="rail">
+      <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+      <aside class="rail" id="rail" aria-label="Odds, coach and count">
+        <div class="sheet-head"><b>Odds, coach and count</b><button class="btn" id="sheet-close">Close</button></div>
         <div class="panel" id="odds-panel"></div>
         <div class="panel" id="coach-panel"></div>
         <div class="panel" id="count-panel"></div>

@@ -54,6 +54,7 @@
   let coachFeedback = null;
   let countCheck = null;
   let roundSummary = null;
+  let coachShort = null;
   let logLines = [];
   let oddsCache = { key: null, odds: null };
   let shownCards = new WeakMap();
@@ -177,6 +178,19 @@
         '<div class="hands">' + hands + '</div>' +
         '<div class="seat-bank">' + money(seat.bankroll) + ins + '</div></div>';
     }).join('');
+
+    // Phone view: the other players as a thin strip with their totals.
+    $('others').innerHTML = t.seats.filter((s) => s !== human).map((seat) => {
+      const isTurn = cur && cur.seat === seat;
+      let info = '<span class="num">—</span>';
+      if (seat.hands.length) {
+        info = seat.hands.map((h) => {
+          const res = h.result ? ' <span class="result ' + h.result + '">' + { win: 'Win', blackjack: 'BJ', lose: 'Lose', bust: 'Bust', push: 'Push', surrender: 'Surr' }[h.result] + '</span>' : '';
+          return '<span class="num">' + esc(BJ.describeHand(h.cards).replace('bust with ', 'bust ')) + '</span>' + res;
+        }).join(' ');
+      }
+      return '<div class="other' + (isTurn ? ' turn' : '') + '"><b>' + esc(seat.name) + '</b>' + info + '</div>';
+    }).join('');
   }
 
   function renderHeader() {
@@ -214,7 +228,7 @@
       const av = t.available();
       const rec = S.coach === 'hint' ? t.recommend() : null;
       const handLabel = (cur.seat.hands.length > 1 ? 'Hand ' + (cur.handIndex + 1) + ': ' : 'Your hand: ') + BJ.describeHand(cur.hand.cards);
-      c.innerHTML = '<div class="prompt">' + esc(handLabel) + ' against the dealer\'s ' + upName(t.upCard.value) + '</div><div class="row">' +
+      c.innerHTML = '<div class="prompt play">' + esc(handLabel) + ' against the dealer\'s ' + upName(t.upCard.value) + '</div><div class="row actions">' +
         ACTIONS.map((a) => '<button class="btn' + (rec === a ? ' rec' : '') + '" data-act="' + a + '"' + (av[AVAIL_KEY[a]] ? '' : ' disabled') + '>' +
           BJ.ACTION_NAMES[a] + ' <kbd>' + (a === 'P' ? 'P' : a) + '</kbd></button>').join('') + '</div>' +
         (rec ? '<div class="hint">The ring marks the basic strategy move. Turn hints off in Settings to test yourself.</div>' : '');
@@ -395,6 +409,78 @@
     }
   }
 
+  function shortFeedback(fb, odds) {
+    if (fb.correct) return '<span class="ok">✓ ' + BJ.ACTION_NAMES[fb.action] + ' was correct.</span>';
+    const evs = { H: odds.hit.ev, S: odds.stand.ev, D: odds.double && odds.double.ev, P: odds.split && odds.split.ev, R: odds.surrender && odds.surrender.ev };
+    const cost = (evs[fb.recommended] || 0) - (evs[fb.action] || 0);
+    return '<span class="bad">✗ Basic strategy: ' + BJ.ACTION_NAMES[fb.recommended] + (cost > 0.0005 ? ' (cost ' + pct(cost) + ')' : '') + '.</span>';
+  }
+
+  // Phone view: one or two lines of the most useful facts. Tap to open the full panel.
+  function renderStrip() {
+    const t = table;
+    const parts = [];
+    const tc = t.shoe.trueCount;
+    const countPart = S.showCount ? 'True count ' + (tc > 0 ? '+' : '') + tc.toFixed(1) : '';
+    if (t.phase === 'insurance' && human.inRound && !human.insuranceDecided) {
+      const comp = t.unseenComposition();
+      let n = 0;
+      for (let r = 1; r <= 10; r++) n += comp[r];
+      const pTen = comp[10] / n;
+      if (S.showOdds) parts.push('Dealer blackjack chance ' + pct(pTen) + ' · Insurance EV ' + signedPct(3 * pTen - 1));
+      parts.push(countPart);
+    } else if (t.phase === 'playing' && isHumanTurn()) {
+      if (coachShort) parts.push(coachShort);
+      if (S.coach === 'hint') parts.push('Coach: <b>' + BJ.ACTION_NAMES[t.recommend()] + '</b>');
+      if (S.showOdds) {
+        const o = currentOdds();
+        const list = [['Hit', o.hit], ['Stand', o.stand], ['Double', o.double], ['Split', o.split], ['Surrender', o.surrender]].filter((x) => x[1]);
+        const best = list.reduce((a, b) => (b[1].ev > a[1].ev ? b : a));
+        parts.push('Best EV: ' + best[0] + ' ' + signedPct(best[1].ev) + ' · Bust if hit ' + pct(o.hit.bust, 0));
+      }
+      parts.push(countPart);
+    } else if (t.phase === 'betting' || t.phase === 'roundOver') {
+      if (coachShort) parts.push(coachShort);
+      parts.push('House edge ' + BJ.houseEdgeEstimate(S.rules).total.toFixed(2) + '%');
+      if (S.showCount) {
+        const u = BJ.counterUnits(tc);
+        parts.push(countPart + ' · Counter bets ' + u + ' unit' + (u > 1 ? 's' : ''));
+      }
+    } else {
+      if (coachShort) parts.push(coachShort);
+      if (t.dealer.cards.length && S.showOdds) {
+        const up = t.upCard.value;
+        const comp = BJ.freshComposition(S.rules.decks);
+        comp[up]--;
+        parts.push('Dealer busts from ' + upName(up) + ': ' + pct(BJ.dealerOutcomes(up, comp, S.rules, up === 1 || up === 10)[5], 0));
+      }
+      parts.push(countPart);
+    }
+    $('strip').innerHTML = '<span class="s-main">' + parts.filter(Boolean).join(' · ') + '</span><span class="s-more">More ▲</span>';
+  }
+
+  function openSheet(open) {
+    $('rail').classList.toggle('open', open);
+    $('sheet-backdrop').hidden = !open;
+    $('strip').setAttribute('aria-expanded', String(open));
+    if (open) $('log').scrollTop = $('log').scrollHeight;
+  }
+  $('strip').onclick = () => openSheet(true);
+  $('sheet-close').onclick = () => openSheet(false);
+  $('sheet-backdrop').onclick = () => openSheet(false);
+
+  // Keep the phone layout sized to the real header and dock heights.
+  function syncHeights() {
+    const root = document.documentElement.style;
+    root.setProperty('--head-h', document.querySelector('.top').offsetHeight + 'px');
+    root.setProperty('--dock-h', $('dock').offsetHeight + 'px');
+  }
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(syncHeights);
+    ro.observe(document.querySelector('.top'));
+    ro.observe($('dock'));
+  }
+
   function addLog(kind, text) {
     logLines.push({ kind, text });
     if (logLines.length > 120) logLines.shift();
@@ -419,6 +505,7 @@
     renderCoach();
     renderCount();
     renderLog();
+    renderStrip();
   }
 
   // ---------------------------------------------------------------------------
@@ -471,6 +558,7 @@
     if (bet < S.minBet || bet > Math.min(S.maxBet, human.bankroll)) return;
     lastBet = bet;
     coachFeedback = null;
+    coachShort = null;
     countCheck = null;
     roundSummary = null;
     if (table.shoe.cutCardOut || table.shoe.remaining < table.minCardsForRound()) {
@@ -493,6 +581,7 @@
     const odds = currentOdds();
     const fb = table.act(a);
     coachFeedback = S.coach === 'off' ? null : feedbackHTML(fb, odds);
+    coachShort = S.coach === 'off' ? null : shortFeedback(fb, odds);
     run();
   }
 
@@ -509,6 +598,9 @@
         : '<div class="coach-msg bad"><span class="coach-tag bad">Not basic strategy</span><strong>' + (take ? 'Basic strategy never takes insurance.' : 'A counter takes insurance here.') + '</strong>' +
           (take ? 'Fewer than 1 in 3 unseen cards are tens, so this bet loses money on average. Even money is the same bet with a different name.' : 'The true count is +3 or higher, so more than 1 in 3 unseen cards are tens.') + '</div>';
     }
+    coachShort = S.coach === 'off' ? null : (take === (tc >= 3)
+      ? '<span class="ok">✓ Correct</span> ' + (take ? 'Insurance pays at this count.' : 'No insurance.')
+      : '<span class="bad">✗ ' + (take ? 'Never take insurance without a high count.' : 'A counter takes insurance here.') + '</span>');
     run();
   }
 
@@ -525,6 +617,7 @@
   }
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') openSheet(false);
     if (view !== 'table' || e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (table.phase === 'insurance' && !human.insuranceDecided) {

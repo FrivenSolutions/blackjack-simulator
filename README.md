@@ -9,6 +9,11 @@ Open `index.html` in a web browser. You do not need to install or build anything
 
 ## The game
 
+On a phone, the table fits on one screen. Large buttons sit in a dock at the
+bottom. A short strip above them shows the key odds. Tap it to open the full
+odds, coach, count and log.
+
+
 - One shoe holds 5 decks (you can choose 1 to 8). The dealer burns one card after
   each shuffle. When the cut card comes out (75% of the shoe by default), the
   dealer finishes the hand and shuffles.
