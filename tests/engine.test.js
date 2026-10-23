@@ -151,3 +151,24 @@ test('simulated basic strategy edge is near the published estimate', () => {
   const est = BJ.houseEdgeEstimate(R).total / 100;
   assert.ok(Math.abs(r.edge - est) < 4 * r.se + 0.002, 'edge ' + r.edge + ' vs ' + est);
 });
+
+test('drill hands match their focus', () => {
+  const rng = BJ.mulberry32(9);
+  for (let i = 0; i < 2000; i++) {
+    for (const focus of Object.keys(BJ.DRILL_FOCUS)) {
+      const d = BJ.drillHand(focus, R, rng);
+      assert.strictEqual(d.cards.length, 2);
+      assert.ok(d.up >= 1 && d.up <= 10);
+      assert.strictEqual(d.upCard.value, d.up);
+      const pair = d.cards[0].value === d.cards[1].value;
+      const soft = BJ.handTotal(d.cards).soft;
+      if (focus === 'pairs') assert.ok(pair);
+      if (focus === 'soft') assert.ok(soft && !pair);
+      if (focus === 'hitstand') {
+        assert.ok(!pair);
+        assert.ok(['H', 'S'].includes(BJ.basicStrategy(d.cards, d.up, R, d.can)));
+      }
+      if (focus === 'all' && d.kind === 'hard') assert.ok(!pair && !soft);
+    }
+  }
+});

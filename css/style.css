@@ -462,3 +462,31 @@ dl.gloss dd { margin: 0; }
   .zone-label { display: none; }
   .felt { gap: 6px; padding-top: 8px; }
 }
+
+/* ---------- Drill ---------- */
+.drill { display: flex; flex-direction: column; gap: 12px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg-btn {
+  border: 1px solid var(--line); background: var(--bg); padding: 7px 14px; border-radius: 999px; cursor: pointer; font-weight: 600; font-size: .9rem;
+}
+.seg-btn[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.drill-felt {
+  display: flex; justify-content: center; gap: clamp(20px, 8vw, 80px); flex-wrap: wrap;
+  background: radial-gradient(ellipse at 50% 20%, color-mix(in oklab, var(--felt) 85%, white 15%), var(--felt) 60%, var(--felt-deep));
+  border: 8px solid var(--rail); border-radius: 18px; padding: 16px 12px; color: var(--felt-ink);
+  --card-w: clamp(56px, 9vw, 76px);
+}
+.drill-hand { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.drill-hand .cards .card + .card { margin-left: calc(var(--card-w) * -0.3); }
+.drill-actions { display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: 8px; max-width: 620px; }
+.drill-actions .btn { justify-content: center; min-height: 52px; padding: 0 4px; }
+.drill-actions .btn:disabled { opacity: 1; cursor: default; }
+.drill-actions .btn.wrong { border-color: var(--bad); color: var(--bad); }
+.drill-actions .btn:disabled:not(.rec):not(.wrong) { opacity: .45; }
+.drill-score { color: var(--muted); font-size: .9rem; }
+#view-drill .ev-list { max-width: 420px; }
+table.strat th.wide, table.strat td.wide { width: auto; padding: 0 8px; white-space: nowrap; font-weight: 600; color: var(--muted); }
+table.strat td.small { font-weight: 400; font-size: .7rem; color: var(--muted); }
+#hit-or-stand h3 { margin-top: 6px; }
+@media (max-width: 400px) { .drill-actions .btn { font-size: .78rem; } }
+@media (max-width: 700px) { .btn kbd { display: none; } }

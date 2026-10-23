@@ -1048,11 +1048,68 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Practice drill
+  // ---------------------------------------------------------------------------
+
+  const DRILL_FOCUS = {
+    all: { label: 'All hands', blurb: 'Hard totals, soft totals and pairs, with every move allowed.' },
+    hitstand: { label: 'Hit or stand', blurb: 'Only Hit and Stand. Mostly hard 12–16 and soft 17–18, the hands that people get wrong most.' },
+    soft: { label: 'Soft hands', blurb: 'An Ace with one other card.' },
+    pairs: { label: 'Pairs', blurb: 'Split or not?' },
+  };
+
+  // Makes one practice spot: two player cards and a dealer up card.
+  // Returns {cards, up, kind, can}. "can" lists the moves the drill allows.
+  function drillHand(focus, rules, rng) {
+    const rand = rng || Math.random;
+    const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+    const mk = (rank) => ({ rank, suit: pick(SUITS), value: rankValue(rank) });
+    const tenRank = () => pick(['10', 'J', 'Q', 'K']);
+    const rankOf = (v) => (v === 1 ? 'A' : v === 10 ? tenRank() : String(v));
+    const hardCards = (t) => {
+      const opts = [];
+      for (let a = 2; a <= 10; a++) {
+        const b = t - a;
+        if (b >= 2 && b <= 10 && b !== a && a < b) opts.push([a, b]);
+      }
+      const [a, b] = pick(opts);
+      return rand() < 0.5 ? [mk(rankOf(a)), mk(rankOf(b))] : [mk(rankOf(b)), mk(rankOf(a))];
+    };
+
+    let kind = focus;
+    if (focus === 'all') {
+      const r = rand();
+      kind = r < 0.6 ? 'hard' : r < 0.8 ? 'soft' : 'pairs';
+    }
+    let cards;
+    if (kind === 'hitstand') {
+      const r = rand();
+      if (r < 0.7) cards = hardCards(12 + Math.floor(rand() * 5));
+      else if (r < 0.9) cards = [mk('A'), mk(pick(['6', '7']))];
+      else cards = hardCards(pick([8, 9, 10, 11, 17, 18, 19]));
+    } else if (kind === 'hard') {
+      cards = hardCards(5 + Math.floor(rand() * 15));
+    } else if (kind === 'soft') {
+      cards = [mk('A'), mk(String(2 + Math.floor(rand() * 8)))];
+      if (rand() < 0.5) cards.reverse();
+    } else {
+      const v = 1 + Math.floor(rand() * 10);
+      cards = [mk(rankOf(v)), mk(rankOf(v))];
+    }
+    const up = 1 + Math.floor(rand() * 10);
+    const pair = cards[0].value === cards[1].value;
+    const can = kind === 'hitstand'
+      ? { double: false, split: false, surrender: false }
+      : { double: true, split: pair, surrender: !!rules.surrender };
+    return { cards, up, upCard: mk(rankOf(up)), kind: kind === 'hitstand' ? 'hard' : kind, can };
+  }
+
   const BJ = {
     RANKS, SUITS, Shoe, Table, Simulator, DEFAULT_RULES, BOT_STYLES, BOT_NAMES, ACTION_NAMES,
     rankValue, hiLo, handTotal, isNatural, describeHand, basicStrategy, strategyReason,
     dealerOutcomes, actionOdds, standResult, dealerTable, bustChanceFresh, freshComposition,
-    houseEdgeEstimate, playerEdgeFromCount, counterUnits, makeSeat, newStats, mulberry32, cardName, fmt,
+    houseEdgeEstimate, playerEdgeFromCount, counterUnits, DRILL_FOCUS, drillHand, makeSeat, newStats, mulberry32, cardName, fmt,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = BJ;

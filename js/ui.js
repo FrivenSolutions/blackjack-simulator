@@ -60,6 +60,17 @@
   let shownCards = new WeakMap();
   let view = 'table';
 
+  function newDrillStats() {
+    return { n: 0, correct: 0, streak: 0, best: 0, byKind: { hard: [0, 0], soft: [0, 0], pairs: [0, 0] }, misses: [] };
+  }
+  const drill = {
+    focus: (saved.drill && saved.drill.focus) || 'hitstand',
+    stats: Object.assign(newDrillStats(), (saved.drill && saved.drill.stats) || {}),
+    spot: null,
+    answer: null,
+    retry: [],
+  };
+
   function save() {
     try {
       localStorage.setItem(STORE, JSON.stringify({
@@ -67,6 +78,7 @@
         human: { bankroll: human.bankroll, stats: human.stats, rebuys },
         history: history.slice(-1000),
         simResults: simResults.slice(0, 30),
+        drill: { focus: drill.focus, stats: drill.stats },
         lastBet,
       }));
     } catch (e) { /* storage blocked: the game still works for this visit */ }
@@ -618,6 +630,12 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') openSheet(false);
+    if (view === 'drill' && !e.target.closest('input, select, textarea') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (ACTION_KEYS[k] && !drill.answer) { e.preventDefault(); drillAnswer(ACTION_KEYS[k]); }
+      else if ((k === 'enter' || k === ' ' || k === 'n') && drill.answer && !e.target.closest('button')) { e.preventDefault(); drillNext(); }
+      return;
+    }
     if (view !== 'table' || e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (table.phase === 'insurance' && !human.insuranceDecided) {
@@ -633,7 +651,7 @@
   // Tabs
   // ---------------------------------------------------------------------------
 
-  const VIEWS = ['table', 'learn', 'sim', 'stats', 'setup'];
+  const VIEWS = ['table', 'drill', 'learn', 'sim', 'stats', 'setup'];
   function show(v) {
     if (!VIEWS.includes(v)) v = 'table';
     view = v;
@@ -641,6 +659,7 @@
       $('view-' + name).hidden = name !== v;
       $('tab-' + name).setAttribute('aria-selected', String(name === v));
     }
+    if (v === 'drill') renderDrill();
     if (v === 'learn') renderLearn();
     if (v === 'sim') renderSim();
     if (v === 'stats') renderStats();
@@ -692,6 +711,8 @@
 
     $('view-learn').innerHTML =
       '<div><h2>How the casino beats you, and by how much</h2><p class="lead">Every number on this page comes from the rules you set in Settings. Change a rule and the numbers change.</p></div>' +
+
+      hitStandLesson(r, dt) +
 
       '<div class="section"><h3>The house edge</h3>' +
       '<p>The <b>house edge</b> is the part of each bet that the casino keeps on average over many hands. With your rules and perfect basic strategy, it is about <b>' + he.total.toFixed(2) + '%</b>. For each $100 that you bet, you lose about ' + money(he.total) + ' on average. Any single session can go up or down by much more than that.</p>' +
@@ -768,6 +789,207 @@
         ['First base / third base', 'The first seat to play (dealer\'s left) and the last seat to play (dealer\'s right).'],
         ['Variance', 'How far real results swing away from the average. In blackjack it is large compared to the house edge.'],
       ].map(([t, d]) => '<dt>' + esc(t) + '</dt><dd>' + esc(d) + '</dd>').join('') + '</dl></div>';
+    $('go-drill').onclick = () => {
+      drill.focus = 'hitstand';
+      drill.spot = null;
+      drill.answer = null;
+      show('drill');
+      window.scrollTo(0, 0);
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hit or stand lesson (top of the Learn tab)
+  // ---------------------------------------------------------------------------
+
+  function upList(ups) {
+    const names = ups.map(upName);
+    if (names.length <= 1) return names.join('');
+    return names.slice(0, -1).join(', ') + ' or ' + names[names.length - 1];
+  }
+
+  function hitStandLesson(r, dt) {
+    const ups = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1];
+    const none = { double: false, split: false, surrender: false };
+    const bustRow = {};
+    for (const row of dt) bustRow[row.up] = row.dist[5];
+    const hard = (t) => [c('10'), c(String(t - 10))];
+
+    // Hit / stand chart for the hard hands 12-16 (no double or surrender).
+    let chart = '<div class="scroll"><table class="strat"><thead><tr><th></th>' + ups.map((u) => '<th>' + upName(u) + '</th>').join('') +
+      '<th class="wide">You bust if you hit</th></tr></thead><tbody>';
+    for (let t = 12; t <= 16; t++) {
+      chart += '<tr><th>' + t + '</th>' + ups.map((u) => {
+        const a = BJ.basicStrategy(hard(t), u, r, none);
+        return '<td class="a-' + a + '">' + a + '</td>';
+      }).join('') + '<td class="wide">' + pct(BJ.bustChanceFresh(t, r.decks), 0) + '</td></tr>';
+    }
+    chart += '<tr><th>Dealer busts</th>' + ups.map((u) => '<td class="small">' + Math.round(bustRow[u] * 100) + '%</td>').join('') + '<td></td></tr>';
+    chart += '</tbody></table></div>';
+
+    // Soft 18 depends on the rules, so build its advice from the strategy function.
+    const s18 = { S: [], H: [], D: [] };
+    for (const u of ups) s18[BJ.basicStrategy([c('A'), c('7')], u, r, { double: true, split: false, surrender: false })].push(u);
+
+    // Hard 12: against which weak cards do you still hit?
+    const hit12 = [2, 3, 4, 5, 6].filter((u) => BJ.basicStrategy(hard(12), u, r, none) === 'H');
+
+    // The famous close call: 16 against 10.
+    const comp = BJ.freshComposition(r.decks);
+    comp[10] -= 2; comp[6]--;
+    const o = BJ.actionOdds([c('10'), c('6')], 10, comp, r, { double: false, split: false, surrender: r.surrender }, true);
+
+    return '<div class="section" id="hit-or-stand"><h3>Hit or stand?</h3>' +
+      '<p><b>The rules in short.</b> You want a total closer to 21 than the dealer, without going over 21. Cards 2–10 count as their number. J, Q and K count as 10. An Ace counts as 11, or as 1 if 11 would take you over 21. <b>Hit</b> means take one more card. <b>Stand</b> means stop. If you go over 21, you <b>bust</b> and lose at once, even if the dealer busts later.</p>' +
+      '<p><b>The dealer has no choices.</b> The dealer must hit until 17 or more' + (r.hitSoft17 ? ', and must hit soft 17' : ' and stands on soft 17') + '. Only your decisions change the result.</p>' +
+      '<h3>Three groups of hands</h3><ul>' +
+      '<li><b>Hard 11 or less: always hit.</b> No card can bust you. (Hard 9–11 is often a double down.)</li>' +
+      '<li><b>Hard 17 or more: always stand.</b> One hit busts 17 about ' + pct(BJ.bustChanceFresh(17, r.decks), 0) + ' of the time.</li>' +
+      '<li><b>Hard 12–16: look at the dealer\'s up card.</b> These hands are weak. If you stand, you win only when the dealer busts. Against a 2–6, stand' + (hit12.length ? ' (but hit 12 against ' + upList(hit12) + ')' : '') + '. The dealer must hit a weak total and busts often. Against a 7 or higher, hit. The dealer will probably make 17–21.</li></ul>' +
+      chart +
+      '<p class="note">Hard 12–16 with no double or surrender. Fresh ' + r.decks + '-deck shoe. For a 10 or Ace, the dealer has checked for blackjack and does not have it.</p>' +
+      '<p><b>Memory aid: expect a 10 in the hole.</b> About 31% of the cards are worth 10, more than any other value. A dealer 6 often becomes 16, which must hit and may bust. A dealer 10 often becomes 20, which beats your 16.</p>' +
+      '<h3>Soft hands</h3><p>A soft hand has an Ace that counts as 11. One more card cannot bust it, so hitting is safer than it looks.</p><ul>' +
+      '<li><b>Soft 17 or less (A,2 to A,6): always hit.</b> Doubling is sometimes better. Never stand on soft 17.</li>' +
+      '<li><b>Soft 18 (A,7):</b> stand against ' + upList(s18.S) + '. Hit against ' + upList(s18.H) + '.' + (s18.D.length ? ' Double against ' + upList(s18.D) + ' (stand if you cannot double).' : '') + '</li>' +
+      '<li><b>Soft 19 or more: stand.</b></li></ul>' +
+      '<h3>The hardest hand: 16 against a 10</h3>' +
+      '<p>If you stand, you win only when the dealer busts: ' + pct(o.stand.win, 0) + '. If you hit, you bust ' + pct(o.hit.bust, 0) + ' of the time. Standing averages ' + signedPct(o.stand.ev) + ' and hitting averages ' + signedPct(o.hit.ev) + ' of your bet. ' +
+      (r.surrender ? 'Surrender costs exactly 50%, a little less, so surrender when you can. Otherwise, hit.' : 'Your table has no surrender, so hit. It is a little better.') + '</p>' +
+      '<div class="row"><button class="btn primary" id="go-drill">Practice hit or stand in the Drill</button></div></div>';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Drill
+  // ---------------------------------------------------------------------------
+
+  function spotKey(sp) {
+    return sp.cards.map((x) => x.value).sort((a, b) => a - b).join(',') + 'v' + sp.up;
+  }
+
+  function spotText(sp) {
+    return sp.cards.map((x) => x.rank + x.suit).join(' ') + ' (' + BJ.describeHand(sp.cards) + ') vs ' + upName(sp.up);
+  }
+
+  function drillNext() {
+    const st = drill.stats;
+    // A missed spot comes back after three more hands.
+    const due = drill.retry.findIndex((x) => x.focus === drill.focus && x.due <= st.n);
+    if (due >= 0) {
+      drill.spot = drill.retry.splice(due, 1)[0].spot;
+      drill.spot.retry = true;
+    } else {
+      drill.spot = BJ.drillHand(drill.focus, S.rules);
+    }
+    drill.answer = null;
+    renderDrill();
+  }
+
+  function drillAnswer(a) {
+    const sp = drill.spot;
+    if (!sp || drill.answer) return;
+    const allowed = { H: true, S: true, D: sp.can.double, P: sp.can.split, R: sp.can.surrender };
+    if (!allowed[a]) return;
+    const rec = BJ.basicStrategy(sp.cards, sp.up, S.rules, sp.can);
+    const ok = a === rec;
+    const st = drill.stats;
+    st.n++;
+    st.byKind[sp.kind][1]++;
+    if (ok) {
+      st.correct++;
+      st.byKind[sp.kind][0]++;
+      st.streak++;
+      st.best = Math.max(st.best, st.streak);
+    } else {
+      st.streak = 0;
+      st.misses.push({ text: spotText(sp), did: BJ.ACTION_NAMES[a], should: BJ.ACTION_NAMES[rec] });
+      if (st.misses.length > 30) st.misses.shift();
+      drill.retry.push({ focus: drill.focus, due: st.n + 3, spot: { cards: sp.cards, up: sp.up, upCard: sp.upCard, kind: sp.kind, can: sp.can } });
+    }
+    const comp = BJ.freshComposition(S.rules.decks);
+    for (const x of sp.cards) comp[x.value]--;
+    comp[sp.up]--;
+    drill.answer = { action: a, rec, ok, odds: BJ.actionOdds(sp.cards, sp.up, comp, S.rules, sp.can, true) };
+    save();
+    renderDrill();
+  }
+
+  function renderDrill() {
+    const el = $('view-drill');
+    if (!drill.spot) drill.spot = BJ.drillHand(drill.focus, S.rules);
+    const sp = drill.spot;
+    const st = drill.stats;
+    const ans = drill.answer;
+    const allowed = { H: true, S: true, D: sp.can.double, P: sp.can.split, R: sp.can.surrender };
+    const shown = ACTIONS.filter((a) => allowed[a]);
+    const cardsHTML = (cs) => cs.map((x) => {
+      const red = x.suit === '♥' || x.suit === '♦';
+      return '<div class="card' + (red ? ' red' : '') + '" role="img" aria-label="' + x.rank + x.suit + '"><span class="corner">' + x.rank + '<small>' + x.suit + '</small></span><span class="pip">' + x.suit + '</span></div>';
+    }).join('');
+
+    let feedback = '';
+    if (ans) {
+      const o = ans.odds;
+      const list = [['H', 'Hit', o.hit], ['S', 'Stand', o.stand], ['D', 'Double', o.double], ['P', 'Split', o.split], ['R', 'Surrender', o.surrender]].filter((x) => x[2]);
+      const bestEv = Math.max.apply(null, list.map((x) => x[2].ev));
+      const reason = esc(BJ.strategyReason(sp.cards, sp.up, ans.rec));
+      const dealerBust = o.dealer[5];
+      feedback = '<div class="row"><button class="btn primary" id="drill-next">Next hand <kbd>Enter</kbd></button></div>' +
+        '<div class="coach-msg ' + (ans.ok ? 'ok' : 'bad') + '"><span class="coach-tag ' + (ans.ok ? 'ok' : 'bad') + '">' + (ans.ok ? 'Correct' : 'Not basic strategy') + '</span>' +
+        '<strong>' + (ans.ok ? BJ.ACTION_NAMES[ans.rec] + ' is right.' : 'You chose ' + BJ.ACTION_NAMES[ans.action] + '. Basic strategy says ' + BJ.ACTION_NAMES[ans.rec] + '.') + '</strong>' + reason +
+        ' The dealer busts from ' + upName(sp.up) + ' about ' + pct(dealerBust, 0) + ' of the time. One hit busts your hand ' + pct(o.hit.bust, 0) + ' of the time.</div>' +
+        '<div class="ev-list" style="margin-top:10px">' + list.map(([, label, v]) => evRow(label, v.ev, v.ev === bestEv)).join('') + '</div>' +
+        '<p class="note" style="margin-top:6px">Average result per $1 bet for each move.' + (sp.retry ? ' You missed this spot before, so it came back for another try.' : '') + '</p>';
+    }
+
+    const kindRow = (k, label) => {
+      const [cc, nn] = st.byKind[k];
+      return '<tr><td class="text">' + label + '</td><td>' + nn + '</td><td>' + (nn ? pct(cc / nn, 0) : '—') + '</td></tr>';
+    };
+
+    el.innerHTML =
+      '<div><h2>Practice drill</h2><p class="lead">Read the hand and the dealer\'s up card, then choose a move. No money, no waiting. A hand you get wrong comes back a few hands later.</p></div>' +
+      '<div class="section drill">' +
+      '<div class="seg" role="group" aria-label="What to practice">' + Object.keys(BJ.DRILL_FOCUS).map((k) =>
+        '<button class="seg-btn" data-focus="' + k + '" aria-pressed="' + (drill.focus === k) + '">' + BJ.DRILL_FOCUS[k].label + '</button>').join('') + '</div>' +
+      '<p class="note">' + esc(BJ.DRILL_FOCUS[drill.focus].blurb) + '</p>' +
+      '<div class="drill-felt">' +
+      '<div class="drill-hand"><div class="zone-label">Dealer shows</div><div class="cards">' + cardsHTML([sp.upCard]) + '<div class="card back" role="img" aria-label="Face-down card"></div></div></div>' +
+      '<div class="drill-hand"><div class="zone-label">Your hand</div><div class="cards">' + cardsHTML(sp.cards) + '</div><span class="tot">' + esc(BJ.describeHand(sp.cards)) + '</span></div>' +
+      '</div>' +
+      '<div class="prompt">' + esc(BJ.describeHand(sp.cards).replace(/^\d/, (m) => 'hard ' + m).replace(/^./, (m) => m.toUpperCase())) + ' against a ' + upName(sp.up) + '. What do you do?</div>' +
+      '<div class="row actions drill-actions" style="--n:' + shown.length + '">' + shown.map((a) => {
+        let cls = 'btn';
+        if (ans && a === ans.rec) cls += ' rec';
+        if (ans && a === ans.action && !ans.ok) cls += ' wrong';
+        return '<button class="' + cls + '" data-drill="' + a + '"' + (ans ? ' disabled' : '') + '>' + BJ.ACTION_NAMES[a] + ' <kbd>' + a + '</kbd></button>';
+      }).join('') + '</div>' +
+      feedback +
+      '<div class="drill-score num">Score ' + st.correct + ' / ' + st.n + (st.n ? ' (' + pct(st.correct / st.n, 0) + ')' : '') + ' · Streak ' + st.streak + ' · Best ' + st.best + '</div>' +
+      '</div>' +
+      '<div class="section"><h3>Your progress</h3>' +
+      '<div class="scroll"><table class="data"><thead><tr><th>Hand type</th><th>Tried</th><th>Correct</th></tr></thead><tbody>' +
+      kindRow('hard', 'Hard totals') + kindRow('soft', 'Soft totals') + kindRow('pairs', 'Pairs') + '</tbody></table></div>' +
+      (st.misses.length
+        ? '<h3 style="margin-top:14px">Recent misses</h3><div class="scroll"><table class="data"><thead><tr><th>Hand</th><th>You chose</th><th>Correct</th></tr></thead><tbody>' +
+          st.misses.slice(-10).reverse().map((m) => '<tr><td class="text">' + esc(m.text) + '</td><td class="text">' + esc(m.did) + '</td><td class="text">' + esc(m.should) + '</td></tr>').join('') + '</tbody></table></div>'
+        : '') +
+      '<div class="row" style="margin-top:12px"><button class="btn" id="drill-reset">' + (drill.resetArmed ? 'Click again to reset the drill score' : 'Reset drill score') + '</button></div></div>';
+
+    el.querySelectorAll('[data-drill]').forEach((b) => { b.onclick = () => drillAnswer(b.dataset.drill); });
+    el.querySelectorAll('[data-focus]').forEach((b) => {
+      b.onclick = () => { drill.focus = b.dataset.focus; save(); drillNext(); };
+    });
+    if ($('drill-next')) $('drill-next').onclick = drillNext;
+    $('drill-reset').onclick = () => {
+      if (!drill.resetArmed) { drill.resetArmed = true; renderDrill(); return; }
+      drill.resetArmed = false;
+      drill.stats = newDrillStats();
+      drill.retry = [];
+      save();
+      renderDrill();
+    };
+    if (ans && $('drill-next')) $('drill-next').focus({ preventScroll: true });
   }
 
   // ---------------------------------------------------------------------------

@@ -39,7 +39,13 @@ odds, coach, count and log.
   what a mistake costs.
 - **Card counting trainer**: running count, true count and your edge. You can
   hide the count and test yourself.
-- **Learn**: house edge for your rules, dealer outcomes by up card, a basic
+- **Drill**: flash-card practice with no money. The game shows a hand and a dealer
+  up card, you pick a move, and it tells you at once if you are right, why, and
+  the EV of each move. Choose all hands, hit or stand only, soft hands, or pairs.
+  A hand that you get wrong comes back a few hands later.
+- **Learn**: a "Hit or stand?" lesson (the rules in short, the three groups of
+  hands, a hit/stand chart for hard 12–16, soft hands, and 16 against a 10),
+  house edge for your rules, dealer outcomes by up card, a basic
   strategy chart for your rules, card counting, insurance, and a glossary.
 - **Simulator**: plays up to 1,000,000 hands per strategy in a few seconds and
   measures the house edge with a 95% range.
