@@ -512,3 +512,52 @@ table.strat td.small { font-weight: 400; font-size: .7rem; color: var(--muted); 
 }
 #prof-import-file { max-width: 100%; font-size: .85rem; }
 .btn.danger { border-color: var(--bad); color: var(--bad); }
+
+/* ---------- Readable cards ----------
+   A bold sans face reads better than the hairline display face at small sizes. */
+.card { font-family: var(--font-body); font-weight: 700; }
+.card .corner { top: 4px; left: 5px; font-size: calc(var(--card-w) * .32); letter-spacing: -.03em; }
+.card .corner small { font-size: calc(var(--card-w) * .27); }
+.card .pip { font-size: calc(var(--card-w) * .55); }
+
+/* ---------- Phone table: fixed sizes, so nothing moves while you play ---------- */
+@media (max-width: 700px) {
+  body[data-view="table"] { overflow: hidden; overscroll-behavior: none; }
+  body[data-view="table"] .wrap { padding-block: 8px 0; }
+  #view-table { padding-bottom: calc(var(--dock-h, 170px) + 8px); }
+  .felt {
+    min-height: 0;
+    height: calc(100dvh - var(--head-h, 90px) - var(--dock-h, 170px) - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  }
+  .dealer { --card-w: 56px; }
+  .seat.you { --card-w: 74px; }
+  .seat.you.split { --card-w: 52px; }
+  @supports (height: 1cqh) {
+    .felt { container-type: size; }
+    .dealer { --card-w: clamp(44px, 11cqh, 68px); }
+    .seat.you { --card-w: clamp(56px, 16cqh, 92px); }
+    .seat.you.split { --card-w: clamp(42px, 9cqh, 62px); }
+  }
+  .seat.you .hands { min-height: calc(var(--card-w) * 1.4 + 34px); align-content: flex-start; }
+  .seat.you .tot { font-size: 1.05rem; font-weight: 600; }
+  .dealer .tot { font-size: .95rem; }
+  .other { font-size: .88rem; }
+  .other .num { font-weight: 600; }
+
+  .strip { height: 46px; min-height: 0; overflow: hidden; }
+  .strip .s-main { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .controls { height: 98px; justify-content: flex-end; }
+  .controls .prompt { display: none; }
+  .controls .row { flex-wrap: wrap; }
+}
+/* Desktop and tablet: no disabled move row while others play. */
+@media (min-width: 701px) { .actions.waiting { display: none; } }
+@media (max-width: 700px) {
+  /* Fixed heights above your hand, so it does not move during play. */
+  .dealer .cards { min-height: calc(var(--card-w) * 1.4); }
+  #dealer-total { min-height: 28px; }
+  .others { flex-wrap: nowrap; justify-content: safe center; overflow-x: auto; scrollbar-width: none; min-height: 30px; }
+  .others::-webkit-scrollbar { display: none; }
+  .other { flex: none; }
+  .seats { margin-top: 6px; margin-bottom: auto; }
+}

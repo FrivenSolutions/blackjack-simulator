@@ -241,7 +241,7 @@
     $('seats').innerHTML = t.seats.map((seat, i) => {
       const you = seat === human;
       const isTurn = cur && cur.seat === seat;
-      const cls = 'seat' + (you ? ' you' : '') + (isTurn ? ' turn' : '') + (!seat.inRound && t.phase !== 'betting' && t.phase !== 'roundOver' ? ' out' : '');
+      const cls = 'seat' + (you ? ' you' : '') + (seat.hands.length > 1 ? ' split' : '') + (isTurn ? ' turn' : '') + (!seat.inRound && t.phase !== 'betting' && t.phase !== 'roundOver' ? ' out' : '');
       let hands = '';
       if (seat.hands.length) {
         hands = seat.hands.map((h, hi) => {
@@ -355,7 +355,9 @@
     }
     const cur = t.current();
     const who = phase === 'dealer' ? 'The dealer plays' : cur ? cur.seat.name + ' is playing' : 'Dealing';
-    c.innerHTML = '<div class="prompt">' + esc(who) + '…</div><div class="hint">Watch the cards. Each card that you see changes the count and the odds.</div>';
+    // Disabled move buttons keep the dock the same height while others play.
+    c.innerHTML = '<div class="prompt">' + esc(who) + '…</div><div class="hint">Watch the cards. Each card that you see changes the count and the odds.</div>' +
+      '<div class="row actions waiting">' + ACTIONS.map((a) => '<button class="btn" disabled>' + BJ.ACTION_NAMES[a] + '</button>').join('') + '</div>';
   }
 
   function currentOdds() {
@@ -513,7 +515,8 @@
       let n = 0;
       for (let r = 1; r <= 10; r++) n += comp[r];
       const pTen = comp[10] / n;
-      if (S.showOdds) parts.push('Dealer blackjack chance ' + pct(pTen) + ' · Insurance EV ' + signedPct(3 * pTen - 1));
+      parts.push('<b>Insurance?</b> Costs ' + money(human.hands[0].bet / 2) + ', pays 2 to 1');
+      if (S.showOdds) parts.push('Dealer blackjack chance ' + pct(pTen) + ' · EV ' + signedPct(3 * pTen - 1));
       parts.push(countPart);
     } else if (t.phase === 'playing' && isHumanTurn()) {
       if (coachShort) parts.push(coachShort);
@@ -526,6 +529,8 @@
       }
       parts.push(countPart);
     } else if (t.phase === 'betting' || t.phase === 'roundOver') {
+      if (human.bankroll < S.minBet) parts.push('<b>Out of chips.</b>');
+      else if (roundSummary !== null) parts.push('<b>' + (roundSummary > 0 ? 'You won ' + money(roundSummary) : roundSummary < 0 ? 'You lost ' + money(-roundSummary) : 'Push: you broke even') + '.</b>');
       if (coachShort) parts.push(coachShort);
       parts.push('House edge ' + BJ.houseEdgeEstimate(S.rules).total.toFixed(2) + '%');
       if (S.showCount) {
@@ -533,6 +538,8 @@
         parts.push(countPart + ' · Counter bets ' + u + ' unit' + (u > 1 ? 's' : ''));
       }
     } else {
+      const cur = t.current();
+      parts.push(t.phase === 'dealer' ? 'Dealer plays.' : cur ? esc(cur.seat.name) + ' is playing.' : '');
       if (coachShort) parts.push(coachShort);
       if (t.dealer.cards.length && S.showOdds) {
         const up = t.upCard.value;
@@ -730,6 +737,7 @@
   function show(v) {
     if (!VIEWS.includes(v)) v = 'table';
     view = v;
+    document.body.dataset.view = v;
     for (const name of VIEWS) {
       $('view-' + name).hidden = name !== v;
       $('tab-' + name).setAttribute('aria-selected', String(name === v));
