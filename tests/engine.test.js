@@ -11,7 +11,7 @@ const ALL = { double: true, split: true, surrender: true };
 // Builds a table whose shoe deals the given ranks in order (after the burn card).
 function riggedTable(ranks, rules, seats) {
   const t = new BJ.Table(rules);
-  t.shoe.cards = [card('2')].concat(ranks.map(card), Array(300).fill(0).map(() => card('5')));
+  t.shoe.cards = [card('2')].concat(ranks.map(card), Array(300).fill(0).map(() => card('5'))).map((c, i) => Object.assign(c, { id: i }));
   t.shoe.pos = 1;
   t.shoe.cutIndex = 1000;
   for (const s of seats) t.seats.push(BJ.makeSeat(s));
@@ -200,4 +200,52 @@ test('a table snapshot resumes the same hand after a JSON round trip', () => {
   assert.deepStrictEqual(copy.seats.map((s) => s.bankroll), t.seats.map((s) => s.bankroll));
   assert.deepStrictEqual(copy.dealer.cards.map((c) => c.id), t.dealer.cards.map((c) => c.id));
   assert.throws(() => BJ.Table.fromSnapshot({ v: 99 }));
+});
+
+test('re-split aces never asks a bot for a move it cannot make', () => {
+  // Before the fix, a split ace that drew another ace at the hand limit made
+  // basic strategy say "hit", which split aces may not do, and the game stopped.
+  for (const maxHands of [2, 3, 4]) {
+    const sim = new BJ.Simulator(Object.assign({}, R, { resplitAces: true, maxHands, decks: 1 }), 'basic', 5);
+    assert.doesNotThrow(() => sim.run(40000));
+  }
+});
+
+test('split aces at the hand limit stand at once', () => {
+  // Player A,A vs 6. Split; each ace gets another ace. With re-split allowed
+  // but a 2-hand limit, both hands must end with no further choice.
+  const t = riggedTable(['A', '6', 'A', '10', 'A', 'A', '5', '5'], Object.assign({}, R, { resplitAces: true, maxHands: 2 }), [{ name: 'You', type: 'human' }]);
+  t.seats[0].pendingBet = 10;
+  t.startRound();
+  t.act('P');
+  assert.strictEqual(t.phase, 'dealer');
+  assert.deepStrictEqual(t.seats[0].hands.map((h) => h.cards.map((c) => c.rank).join(',')), ['A,A', 'A,A']);
+});
+
+test('a save made after an emergency reshuffle restores the cards on the table', () => {
+  const t = riggedTable(['10', '6', '7'], R, [{ name: 'You', type: 'human' }]);
+  t.seats[0].pendingBet = 10;
+  t.startRound();
+  // Empty the shoe so the next card forces a fresh shuffle in the middle of the hand.
+  t.shoe.pos = t.shoe.cards.length;
+  t.act('H');
+  const events = t.takeEvents().map((e) => e.kind);
+  assert.ok(events.includes('shuffle'));
+  const ids = t.tableCards().map((c) => c.id);
+  assert.strictEqual(new Set(ids).size, ids.length, 'card ids stay unique');
+  const copy = BJ.Table.fromSnapshot(JSON.parse(JSON.stringify(t.snapshot())));
+  assert.deepStrictEqual(copy.tableCards().map((c) => c.rank + c.suit), t.tableCards().map((c) => c.rank + c.suit));
+});
+
+test('the penetration setting works at a full table', () => {
+  const t = new BJ.Table(Object.assign({}, R, { penetration: 0.85 }), BJ.mulberry32(8));
+  for (let i = 0; i < 7; i++) t.seats.push(BJ.makeSeat({ name: 'Bot' + i }));
+  const dealtAtShuffle = [];
+  for (let i = 0; i < 400; i++) {
+    const pos = t.shoe.pos;
+    t.playRoundInstant();
+    if (t.shuffledThisRound && i > 0) dealtAtShuffle.push(pos / t.shoe.total);
+  }
+  const avg = dealtAtShuffle.reduce((a, b) => a + b, 0) / dealtAtShuffle.length;
+  assert.ok(avg > 0.83, 'shuffles near the cut card, at ' + avg.toFixed(3));
 });

@@ -51,7 +51,9 @@
 
     shuffle() {
       const cards = [];
-      let id = 0;
+      // Ids stay unique across shuffles, so a card still on the table after an
+      // emergency reshuffle never shares an id with a card in the new shoe.
+      let id = this.shuffleCount * 1000;
       for (let d = 0; d < this.decks; d++) {
         for (const suit of SUITS) {
           for (const rank of RANKS) {
@@ -189,7 +191,9 @@
     if (!rules.doubleAfterSplit) parts.push({ label: 'No double after split', value: 0.14 });
     if (rules.surrender) parts.push({ label: 'Late surrender allowed', value: rules.hitSoft17 ? -0.09 : -0.07 });
     if (rules.resplitAces) parts.push({ label: 'Re-split aces allowed', value: -0.07 });
-    if (rules.maxHands < 4) parts.push({ label: 'Split to ' + rules.maxHands + ' hands only', value: rules.maxHands === 2 ? 0.10 : 0.03 });
+    // Published values for the split limit vary. This game's simulator measured
+    // +0.056% ± 0.05 for 2 hands only (40 million hands each, 5 decks).
+    if (rules.maxHands < 4) parts.push({ label: 'Split to ' + rules.maxHands + ' hands only', value: rules.maxHands === 2 ? 0.06 : 0.02 });
     if (Math.abs(rules.blackjackPays - 1.2) < 1e-9) parts.push({ label: 'Blackjack pays 6:5', value: 1.39 });
     else if (Math.abs(rules.blackjackPays - 1) < 1e-9) parts.push({ label: 'Blackjack pays 1:1', value: 2.27 });
     const total = parts.reduce((s, p) => s + p.value, 0);
@@ -281,12 +285,14 @@
         if (soft) return 'Soft ' + total + ' cannot bust with one card, and the dealer\'s ' + upName + ' busts often. Put more money on the table when you have the edge.';
         return total + ' against ' + upName + ' is a strong start. One more card often makes 19-21, so doubling pays more on average.';
       case 'S':
+        if (soft && total >= 18) return 'Soft ' + total + ' already beats most dealer results. A hit cannot bust it, but it makes the hand worse more often than better.';
         if (total >= 17) return total + ' is strong enough. A hit busts too often.';
         if (weak) return 'The dealer shows ' + upName + ', a weak card, and must hit to 17. Let the dealer take the risk of a bust.';
         return 'Standing has the best average result here.';
       case 'H':
         if (total <= 11) return 'You cannot bust with one card. Hit to improve.';
         if (soft) return 'A soft hand cannot bust with one card. Hit to improve.';
+        if (weak) return 'The dealer\'s ' + upName + ' busts less often than a 4, 5 or 6. Only a 10-value card busts your ' + total + ', so a hit wins a little more often.';
         return 'The dealer shows ' + upName + ', a strong card. ' + total + ' will probably lose if you stand, so take the bust risk.';
       default:
         return '';
@@ -558,7 +564,11 @@
     }
 
     deal(faceUp) {
+      const before = this.shoe.shuffleCount;
       const card = this.shoe.draw();
+      if (this.shoe.shuffleCount !== before) {
+        this.emit('shuffle', 'The shoe ran out during the hand. The dealer shuffles a fresh shoe. The count starts again at 0.');
+      }
       if (faceUp) this.shoe.see(card);
       return card;
     }
@@ -569,9 +579,12 @@
       return this.seats.filter((s) => s.inRound);
     }
 
-    // Cards that a round needs at most, as a safety margin before the cut card.
+    // Cards to keep in the shoe before a round starts: about 4 per hand, plus a margin.
+    // A larger margin would shuffle before the cut card at a full table, which
+    // would make the penetration setting do nothing. If a rare round still runs
+    // out, draw() shuffles a fresh shoe.
     minCardsForRound() {
-      return 8 + this.seats.length * 8;
+      return 4 * (this.seats.length + 1) + 4;
     }
 
     betFor(seat) {
@@ -753,7 +766,9 @@
       const { hand } = this.current();
       if (hand.cards.length === 1) {
         hand.cards.push(this.deal(true));
-        if (hand.splitAces && !this.canResplitAces(hand)) hand.done = true;
+        // Split aces get one card. They play on only to split again, and only
+        // when the rules, the hand limit and the bankroll allow it.
+        if (hand.splitAces && !this.available().split) hand.done = true;
       }
       if (handTotal(hand.cards).total >= 21) hand.done = true;
       return !hand.done;
@@ -785,8 +800,15 @@
     recommend() {
       const cur = this.current();
       if (!cur) return null;
+      return this.strategyFor(cur.hand);
+    }
+
+    // Basic strategy limited to the moves that are allowed now.
+    strategyFor(hand) {
       const a = this.available();
-      return basicStrategy(cur.hand.cards, this.upCard.value, this.rules, a);
+      const rec = basicStrategy(hand.cards, this.upCard.value, this.rules, a);
+      const allowed = { H: a.hit, S: a.stand, D: a.double, P: a.split, R: a.surrender };
+      return allowed[rec] ? rec : 'S';
     }
 
     // Unseen cards from the player's point of view: the shoe plus the dealer's hole card.
@@ -811,7 +833,7 @@
       const allowed = { H: a.hit, S: a.stand, D: a.double, P: a.split, R: a.surrender };
       if (!allowed[action]) throw new Error('Action not allowed: ' + action);
 
-      const rec = basicStrategy(hand.cards, this.upCard.value, this.rules, a);
+      const rec = this.strategyFor(hand);
       const handText = describeHand(hand.cards);
       seat.stats.decisions++;
       if (rec === action) seat.stats.correct++;
@@ -875,7 +897,6 @@
     botAction() {
       const cur = this.current();
       const { seat, hand } = cur;
-      const a = this.available();
       const { total, soft } = handTotal(hand.cards);
       switch (seat.style) {
         case 'mimic':
@@ -887,7 +908,7 @@
           return total <= 11 || (soft && total <= 17) ? 'H' : 'S';
         }
         default:
-          return basicStrategy(hand.cards, this.upCard.value, this.rules, a);
+          return this.strategyFor(hand);
       }
     }
 
@@ -895,7 +916,11 @@
     botStep() {
       const cur = this.current();
       if (!cur || cur.seat.type !== 'bot') return false;
-      this.act(this.botAction());
+      let action = this.botAction();
+      const a = this.available();
+      const allowed = { H: a.hit, S: a.stand, D: a.double, P: a.split, R: a.surrender };
+      if (!allowed[action]) action = 'S';
+      this.act(action);
       return true;
     }
 
@@ -1008,12 +1033,20 @@
           stats: Object.assign({}, seat.stats, { lowBankroll: Number.isFinite(seat.stats.lowBankroll) ? seat.stats.lowBankroll : null }),
         })),
         dealer: { cards: ids(this.dealer.cards), holeHidden: this.dealer.holeHidden },
+        // Cards on the table from before an emergency reshuffle.
+        loose: this.tableCards().filter((c) => !sh.cards.includes(c)).map((c) => [c.id, c.rank, c.suit]),
         phase: this.phase,
         turn: this.turn,
         peeked: this.peeked,
         roundNo: this.roundNo,
         shuffledThisRound: this.shuffledThisRound,
       };
+    }
+
+    tableCards() {
+      const all = this.dealer.cards.slice();
+      for (const s of this.seats) for (const h of s.hands) all.push(...h.cards);
+      return all;
     }
 
     static fromSnapshot(data, rng) {
@@ -1026,6 +1059,7 @@
         byId.set(id, c);
         return c;
       });
+      for (const [id, rank, suit] of data.loose || []) byId.set(id, { id, rank, suit, value: rankValue(rank) });
       const card = (id) => {
         const c = byId.get(id);
         if (!c) throw new Error('Saved hand refers to a missing card');
@@ -1037,6 +1071,7 @@
         pos: data.shoe.pos, cutIndex: data.shoe.cutIndex, runningCount: data.shoe.runningCount, discards: data.shoe.discards,
       });
       t.seats = data.seats.map((s) => {
+        if (s.type !== 'human' && !BOT_STYLES[s.style]) throw new Error('Unknown player style in the save');
         const seat = Object.assign({}, s, { hands: s.hands.map((h) => Object.assign({}, h, { cards: h.cards.map(card) })) });
         seat.stats = Object.assign(newStats(), s.stats);
         if (seat.stats.lowBankroll === null) seat.stats.lowBankroll = seat.bankroll;

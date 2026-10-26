@@ -110,22 +110,87 @@
     Object.assign(target, source);
   }
 
+  const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
+  const pickNum = (x, lo, hi, def) => (isNum(x) && x >= lo && x <= hi ? x : def);
+  const pickBool = (x, def) => (typeof x === 'boolean' ? x : def);
+  const pickOne = (x, list, def) => (list.includes(x) ? x : def);
+
+  // Keeps only values the game understands, so a damaged save or a bad import
+  // falls back to defaults field by field and never stops the game.
+  function sanitize(data) {
+    const d = data && typeof data === 'object' ? data : {};
+    const D = DEFAULT_SETTINGS;
+    const R = BJ.DEFAULT_RULES;
+    const s = d.settings && typeof d.settings === 'object' ? d.settings : {};
+    const r = s.rules && typeof s.rules === 'object' ? s.rules : {};
+    const settings = {
+      rules: {
+        decks: pickOne(r.decks, [1, 2, 4, 5, 6, 8], R.decks),
+        hitSoft17: pickBool(r.hitSoft17, R.hitSoft17),
+        blackjackPays: pickOne(r.blackjackPays, [1, 1.2, 1.5], R.blackjackPays),
+        doubleAfterSplit: pickBool(r.doubleAfterSplit, R.doubleAfterSplit),
+        surrender: pickBool(r.surrender, R.surrender),
+        maxHands: pickOne(r.maxHands, [2, 3, 4], R.maxHands),
+        resplitAces: pickBool(r.resplitAces, R.resplitAces),
+        penetration: pickNum(r.penetration, 0.5, 0.85, R.penetration),
+      },
+      bots: Array.isArray(s.bots) ? s.bots.filter((b) => BJ.BOT_STYLES[b]).slice(0, 6) : D.bots.slice(),
+      seatPos: Math.round(pickNum(s.seatPos, 0, 6, D.seatPos)),
+      startBankroll: pickNum(s.startBankroll, 100, 1e9, D.startBankroll),
+      botBet: pickOne(s.botBet, [5, 10, 25, 100], D.botBet),
+      speed: pickOne(s.speed, [0, 250, 650, 1100], D.speed),
+      showOdds: pickBool(s.showOdds, D.showOdds),
+      coach: pickOne(s.coach, ['hint', 'after', 'off'], D.coach),
+      showCount: pickBool(s.showCount, D.showCount),
+      minBet: D.minBet,
+      maxBet: D.maxBet,
+    };
+    const h = d.human && typeof d.human === 'object' && isNum(d.human.bankroll) && d.human.bankroll >= 0 ? d.human : null;
+    let stats = null;
+    if (h && h.stats && typeof h.stats === 'object') {
+      stats = BJ.newStats();
+      for (const k of Object.keys(stats)) if (isNum(h.stats[k])) stats[k] = h.stats[k];
+      stats.mistakes = Array.isArray(h.stats.mistakes) ? h.stats.mistakes.filter((m) => m && typeof m === 'object').slice(-50) : [];
+    }
+    const ds = d.drill && d.drill.stats && typeof d.drill.stats === 'object' ? d.drill.stats : null;
+    let drillStats = null;
+    if (ds) {
+      drillStats = newDrillStats();
+      for (const k of ['n', 'correct', 'streak', 'best']) if (isNum(ds[k])) drillStats[k] = ds[k];
+      for (const k of Object.keys(drillStats.byKind)) {
+        const v = ds.byKind && ds.byKind[k];
+        if (Array.isArray(v) && v.length === 2 && v.every(isNum)) drillStats.byKind[k] = v.slice();
+      }
+      if (Array.isArray(ds.misses)) drillStats.misses = ds.misses.filter((m) => m && typeof m.text === 'string').slice(-30);
+    }
+    return {
+      settings,
+      human: h ? { bankroll: h.bankroll, stats, rebuys: Math.round(pickNum(h.rebuys, 0, 1e6, 0)) } : null,
+      history: Array.isArray(d.history) ? d.history.filter((x) => x && isNum(x.b) && isNum(x.e)).slice(-1000) : [],
+      simResults: Array.isArray(d.simResults)
+        ? d.simResults.filter((x) => x && BJ.BOT_STYLES[x.style] && isNum(x.edge) && isNum(x.se) && isNum(x.rounds)).slice(0, 30)
+        : [],
+      drill: { focus: d.drill && BJ.DRILL_FOCUS[d.drill.focus] ? d.drill.focus : 'hitstand', stats: drillStats },
+      lastBet: pickNum(d.lastBet, DEFAULT_SETTINGS.minBet, DEFAULT_SETTINGS.maxBet, 25),
+      table: d.table && typeof d.table === 'object' ? d.table : null,
+    };
+  }
+
   // Loads one profile's data (or defaults when data is empty) into the game.
   function applyData(data) {
-    const d = data && typeof data === 'object' ? data : {};
-    replaceContents(S, Object.assign(JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), d.settings || {}));
-    S.rules = Object.assign({}, BJ.DEFAULT_RULES, (d.settings && d.settings.rules) || {});
+    const d = sanitize(data);
+    replaceContents(S, d.settings);
     replaceContents(human, BJ.makeSeat({ name: 'You', type: 'human', bankroll: d.human ? d.human.bankroll : S.startBankroll }));
     if (d.human && d.human.stats) {
-      human.stats = Object.assign(BJ.newStats(), d.human.stats);
-      if (human.stats.lowBankroll === null) human.stats.lowBankroll = human.bankroll;
+      human.stats = d.human.stats;
+      if (!isNum(human.stats.lowBankroll)) human.stats.lowBankroll = human.bankroll;
     }
-    rebuys = (d.human && d.human.rebuys) || 0;
-    history = Array.isArray(d.history) ? d.history : [];
-    simResults = Array.isArray(d.simResults) ? d.simResults : [];
-    lastBet = d.lastBet || 25;
-    drill.focus = (d.drill && BJ.DRILL_FOCUS[d.drill.focus] && d.drill.focus) || 'hitstand';
-    drill.stats = Object.assign(newDrillStats(), (d.drill && d.drill.stats) || {});
+    rebuys = d.human ? d.human.rebuys : 0;
+    history = d.history;
+    simResults = d.simResults;
+    lastBet = d.lastBet;
+    drill.focus = d.drill.focus;
+    drill.stats = Object.assign(newDrillStats(), d.drill.stats || {});
     drill.spot = null;
     drill.answer = null;
     drill.retry = [];
@@ -149,7 +214,9 @@
   function restoreTable(snap) {
     const t = BJ.Table.fromSnapshot(snap);
     const i = t.seats.findIndex((x) => x.type === 'human');
-    if (i < 0) throw new Error('No human seat in the save');
+    if (i < 0 || t.seats.filter((x) => x.type === 'human').length !== 1) throw new Error('The save needs exactly one human seat');
+    // A table saved under other rules than the settings cannot continue.
+    if (rulesKey(t.rules) !== rulesKey(S.rules)) throw new Error('The saved table uses other rules');
     replaceContents(human, t.seats[i]);
     t.seats[i] = human;
     table = t;
@@ -257,7 +324,7 @@
       } else if (you && human.pendingBet > 0) {
         hands = '<div class="hand"><span class="bet-chip">$' + human.pendingBet + '</span></div>';
       }
-      const ins = seat.insurance ? ' · insured $' + seat.insurance : '';
+      const ins = seat.insurance ? ' · insured ' + money(seat.insurance) : '';
       const style = you ? 'You' : BJ.BOT_STYLES[seat.style].label;
       return '<div class="' + cls + '"><div class="seat-name">' + esc(seat.name) + '</div>' +
         '<div class="seat-style">' + esc(style) + ' · ' + seatPosName(i, n) + '</div>' +
@@ -302,7 +369,7 @@
       const canPay = human.bankroll >= amount;
       c.innerHTML = '<div class="prompt">' + (bj
         ? 'You have blackjack and the dealer shows an Ace. Take even money (a sure 1 to 1 win)?'
-        : 'The dealer shows an Ace. Insurance costs $' + amount + ' and pays 2 to 1 if the dealer has blackjack.') + '</div>' +
+        : 'The dealer shows an Ace. Insurance costs ' + money(amount) + ' and pays 2 to 1 if the dealer has blackjack.') + '</div>' +
         '<div class="row"><button class="btn" id="ins-yes"' + (canPay ? '' : ' disabled') + '>' + (bj ? 'Take even money' : 'Take insurance') + ' <kbd>I</kbd></button>' +
         '<button class="btn" id="ins-no">' + (bj ? 'No, play it out' : 'No insurance') + ' <kbd>N</kbd></button></div>';
       $('ins-yes').onclick = () => humanInsurance(true);
@@ -368,6 +435,12 @@
     return oddsCache.odds;
   }
 
+  // [code, label, odds] for each move that is allowed now.
+  function allowedOdds(o, av) {
+    return [['H', 'Hit', o.hit], ['S', 'Stand', o.stand], ['D', 'Double', o.double], ['P', 'Split', o.split], ['R', 'Surrender', o.surrender]]
+      .filter((x) => x[2] && av[AVAIL_KEY[x[0]]]);
+  }
+
   function evRow(label, ev, best) {
     const w = Math.min(Math.abs(ev), 1) * 50;
     const cls = ev >= 0 ? 'pos' : 'neg';
@@ -399,7 +472,7 @@
       const o = currentOdds();
       const cur = t.current();
       const rows = [];
-      const list = [['H', 'Hit', o.hit], ['S', 'Stand', o.stand], ['D', 'Double', o.double], ['P', 'Split', o.split], ['R', 'Surrender', o.surrender]].filter((x) => x[2]);
+      const list = allowedOdds(o, t.available());
       const bestEv = Math.max.apply(null, list.map((x) => x[2].ev));
       for (const [, label, v] of list) rows.push(evRow(label, v.ev, v.ev === bestEv));
       const bet = cur.hand.bet;
@@ -427,7 +500,7 @@
     }
     p.innerHTML = '<h2>The odds at this table</h2>' +
       '<p>With these rules the house edge is about <b>' + edge.toFixed(2) + '%</b> if you play perfect basic strategy. That means you lose about ' + money(edge / 100 * (human.pendingBet || 25)) + ' on average for each ' + money(human.pendingBet || 25) + ' hand.</p>' +
-      '<p class="note">Most hands you will lose (about 48%) or push (about 8%). You win about 44% of hands. Blackjack payouts, doubles and splits make up most of the difference.</p>';
+      '<p class="note">With perfect play you still lose about 49% of hands, push about 8.5% and win about 42.5%. Blackjacks paid ' + payoutName(S.rules.blackjackPays) + ', doubles and splits win back most of that gap.</p>';
   }
 
   function renderCoach() {
@@ -523,9 +596,9 @@
       if (S.coach === 'hint') parts.push('Coach: <b>' + BJ.ACTION_NAMES[t.recommend()] + '</b>');
       if (S.showOdds) {
         const o = currentOdds();
-        const list = [['Hit', o.hit], ['Stand', o.stand], ['Double', o.double], ['Split', o.split], ['Surrender', o.surrender]].filter((x) => x[1]);
-        const best = list.reduce((a, b) => (b[1].ev > a[1].ev ? b : a));
-        parts.push('Best EV: ' + best[0] + ' ' + signedPct(best[1].ev) + ' · Bust if hit ' + pct(o.hit.bust, 0));
+        const list = allowedOdds(o, t.available());
+        const best = list.reduce((a, b) => (b[2].ev > a[2].ev ? b : a));
+        parts.push('Best EV: ' + best[1] + ' ' + signedPct(best[2].ev) + (t.available().hit ? ' · Bust if hit ' + pct(o.hit.bust, 0) : ''));
       }
       parts.push(countPart);
     } else if (t.phase === 'betting' || t.phase === 'roundOver') {
@@ -821,13 +894,14 @@
       '<div class="section"><h3>Basic strategy for your rules</h3>' +
       '<p><b>Basic strategy</b> is the best move for each hand against each dealer up card. A computer finds it by playing out every case. It does not use the count. Read your hand on the left and the dealer\'s up card at the top.</p>' +
       '<div class="chart-grid">' +
-      strategyTable('Hard totals', hardRows, (cs) => { const t = BJ.handTotal(cs).total; return t === 17 ? '17+' : String(t); }) +
+      strategyTable('Hard totals', hardRows, (cs) => String(BJ.handTotal(cs).total)) +
       strategyTable('Soft totals', softRows, (cs) => 'A,' + cs[1].rank) +
       strategyTable('Pairs', pairRows, (cs) => cs[0].rank + ',' + cs[1].rank) +
       '</div><div class="legend">' +
       '<span><i class="a-H">H</i>Hit</span><span><i class="a-S">S</i>Stand</span><span><i class="a-D">D</i>Double, else hit</span><span><i class="a-D">Ds</i>Double, else stand</span>' +
       '<span><i class="a-P">P</i>Split</span>' + (r.surrender ? '<span><i class="a-R">R</i>Surrender, else hit</span><span><i class="a-R">Rs</i>Surrender, else stand</span>' : '') + '</div>' +
-      '<p class="note">Hard 4 (2,2 that you do not split) and lower: always hit. Hard 18 and higher: always stand. Soft 20 and higher: always stand.</p></div>' +
+      '<p class="note">Hard 4 (2,2 when you cannot split): always hit. Hard 18 and higher: always stand. Soft 20 and higher: always stand.' +
+      (r.decks <= 2 ? ' This chart is for 4 or more decks. With ' + r.decks + (r.decks === 1 ? ' deck' : ' decks') + ', the exact chart differs in a few cells. The coach uses this chart, which costs about 0.1% in a 1-deck game.' : '') + '</p></div>' +
 
       '<div class="section"><h3>Card counting</h3>' +
       '<p>Cards that are already played do not come back until the shuffle. When many low cards are gone, the shoe is rich in tens and Aces. That helps you: you get more blackjacks (paid ' + payoutName(r.blackjackPays) + '), your doubles land on 10s, and the dealer busts more.</p>' +
@@ -938,17 +1012,18 @@
       '<li><b>Soft 19 or more: stand.</b></li></ul>' +
       '<h3>The hardest hand: 16 against a 10</h3>' +
       '<p>If you stand, you win only when the dealer busts: ' + pct(o.stand.win, 0) + '. If you hit, you bust ' + pct(o.hit.bust, 0) + ' of the time. Standing averages ' + signedPct(o.stand.ev) + ' and hitting averages ' + signedPct(o.hit.ev) + ' of your bet. ' +
-      (r.surrender ? 'Surrender costs exactly 50%, a little less, so surrender when you can. Otherwise, hit.' : 'Your table has no surrender, so hit. It is a little better.') + '</p>' +
+      (function () {
+        const better = o.hit.ev >= o.stand.ev ? 'hit' : 'stand';
+        const worst = Math.max(o.hit.ev, o.stand.ev);
+        if (r.surrender && -0.5 > worst) return 'Surrender costs exactly 50%, which is less, so surrender when you can. Otherwise, ' + better + '.';
+        return (r.surrender ? 'Surrender costs 50%, which is not better here. ' : 'Your table has no surrender. ') + 'So ' + better + '. It is a little better.';
+      })() + '</p>' +
       '<div class="row"><button class="btn primary" id="go-drill">Practice hit or stand in the Drill</button></div></div>';
   }
 
   // ---------------------------------------------------------------------------
   // Drill
   // ---------------------------------------------------------------------------
-
-  function spotKey(sp) {
-    return sp.cards.map((x) => x.value).sort((a, b) => a - b).join(',') + 'v' + sp.up;
-  }
 
   function spotText(sp) {
     return sp.cards.map((x) => x.rank + x.suit).join(' ') + ' (' + BJ.describeHand(sp.cards) + ') vs ' + upName(sp.up);
@@ -1209,7 +1284,7 @@
       '<path d="' + line('e') + '" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="4 3"/>' +
       '<path d="' + line('b') + '" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>' +
       '<circle cx="' + x(n).toFixed(1) + '" cy="' + y(last.b).toFixed(1) + '" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>' +
-      '<text x="' + L + '" y="' + (H - 8) + '" font-size="11" fill="var(--muted)">Hand 1</text>' +
+      '<text x="' + L + '" y="' + (H - 8) + '" font-size="11" fill="var(--muted)">Start</text>' +
       '<text x="' + (W - R) + '" y="' + (H - 8) + '" text-anchor="end" font-size="11" fill="var(--muted)">Hand ' + n + '</text>' +
       '<line id="chart-cross" x1="0" x2="0" y1="' + T + '" y2="' + (H - B) + '" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>' +
       '<rect id="chart-hit" x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (H - T - B) + '" fill="transparent"/>' +
@@ -1239,7 +1314,7 @@
       tip.hidden = false;
       tip.style.left = (px / W * box.width) + 'px';
       tip.style.top = '30px';
-      tip.textContent = 'Hand ' + i + ': ' + money(history[i].b) + ' (expected ' + money(Math.round(history[i].e)) + ')';
+      tip.textContent = (i ? 'Hand ' + i : 'Start') + ': ' + money(history[i].b) + ' (expected ' + money(Math.round(history[i].e)) + ')';
     };
     hit.addEventListener('pointermove', move);
     hit.addEventListener('pointerleave', () => { $('chart-tip').hidden = true; $('chart-cross').setAttribute('visibility', 'hidden'); });
@@ -1283,7 +1358,11 @@
     $('reset-stats').onclick = () => {
       if (!resetArmed) { resetArmed = true; renderStats(); return; }
       resetArmed = false;
-      if (table.phase !== 'betting' && table.phase !== 'roundOver') { renderStats(); return; }
+      if (busy || (table.phase !== 'betting' && table.phase !== 'roundOver')) {
+        renderStats();
+        $('reset-stats').insertAdjacentHTML('afterend', '<span class="hint">Finish the current hand first, then reset.</span>');
+        return;
+      }
       human.stats = BJ.newStats();
       human.bankroll = S.startBankroll;
       human.stats.peakBankroll = human.bankroll;
@@ -1606,8 +1685,16 @@
   // Start
   // ---------------------------------------------------------------------------
 
-  applyData(storeGet(profileKey(profiles.active)));
-  renderAll();
+  const startData = storeGet(profileKey(profiles.active));
+  try {
+    applyData(startData);
+    renderAll();
+  } catch (e) {
+    if (startData) storeSet('shoe-odds-backup:' + profiles.active, startData);
+    applyData(null);
+    addLog('info', 'Your saved progress could not be read, so this profile started fresh. A copy of the old data is kept in this browser.');
+    renderAll();
+  }
   show((location.hash || '').slice(1) || 'table');
   // A saved hand continues where it stopped.
   if (['playing', 'dealer', 'insurance', 'roundOver'].includes(table.phase)) run();
